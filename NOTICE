@@ -1,0 +1,78 @@
+motion_transfer
+===============
+
+This project is a derivative work of Lightricks LTX-2. It is governed by the
+LTX-2 Community License Agreement; see the LICENSE file at the root of this
+repository for the full text, including Attachment A (use restrictions).
+
+
+1. LTX-2 (Lightricks)
+---------------------
+   Copyright (c) Lightricks Ltd.
+   Source:  https://github.com/Lightricks/LTX-2
+   License: LTX-2 Community License Agreement (see LICENSE).
+
+   Components in this repository derived from LTX-2:
+       packages/ltx-core/                              (unmodified)
+       packages/ltx-pipelines/src/ltx_pipelines/
+           ic_lora.py                                  (unmodified)
+           utils/                                      (selectively modified)
+
+   Files modified by Flam in this fork (see file headers for details):
+       packages/ltx-pipelines/src/ltx_pipelines/__init__.py
+       packages/ltx-pipelines/src/ltx_pipelines/utils/helpers.py
+       packages/ltx-pipelines/src/ltx_pipelines/utils/model_ledger.py
+
+   Upstream LTX-2 files removed in this fork (not needed for motion transfer):
+       packages/ltx-pipelines/src/ltx_pipelines/a2vid_two_stage.py
+       packages/ltx-pipelines/src/ltx_pipelines/distilled.py
+       packages/ltx-pipelines/src/ltx_pipelines/keyframe_interpolation.py
+       packages/ltx-pipelines/src/ltx_pipelines/retake.py
+       packages/ltx-pipelines/src/ltx_pipelines/ti2vid_one_stage.py
+       packages/ltx-pipelines/src/ltx_pipelines/ti2vid_two_stages.py
+       packages/ltx-pipelines/src/ltx_pipelines/ti2vid_two_stages_hq.py
+       packages/ltx-pipelines/README.md
+       packages/ltx-trainer/                           (entire training package)
+
+   LTX-2 model weights (downloaded at runtime into ./models/, NOT redistributed
+   here) are also governed by the LTX-2 Community License Agreement.
+
+
+2. Gemma 3 (Google)
+-------------------
+   Copyright (c) Google LLC.
+   Source:  https://huggingface.co/google/gemma-3-12b-it-qat-q4_0-unquantized
+   License: Gemma Terms of Use — https://ai.google.dev/gemma/terms
+
+   Used as a text encoder at runtime. Weights are downloaded by the end user
+   and are NOT redistributed by this repository.
+
+
+3. Third-party Python dependencies
+----------------------------------
+   This project relies on the following open-source libraries, installed via
+   uv or pip from PyPI. Each is governed by its own license; refer to its
+   project page for the full text.
+
+       Component          Maintainer / License
+       -------------------------------------------
+       PyTorch            Meta / BSD-style
+       torchaudio         Meta / BSD-style
+       transformers       Hugging Face / Apache 2.0
+       huggingface_hub    Hugging Face / Apache 2.0
+       accelerate         Hugging Face / Apache 2.0
+       safetensors        Hugging Face / Apache 2.0
+       PyAV               PyAV-Org / BSD-3-Clause
+       Pillow             Pillow contributors / HPND/MIT
+       numpy              NumPy / BSD-3-Clause
+       scipy              SciPy / BSD-3-Clause
+       einops             Alex Rogozhnikov / MIT
+       tqdm               Casper da Costa-Luis / MPL-2.0 + MIT
+
+
+4. Outputs
+----------
+   Lightricks claims no rights in the videos produced by this pipeline
+   (LTX-2 Community License §5). However, users remain responsible for
+   ensuring their inputs and outputs comply with Attachment A of the LTX-2
+   Community License and the Gemma Terms of Use referenced above.

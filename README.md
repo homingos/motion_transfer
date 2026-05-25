@@ -12,6 +12,20 @@ Transfer motion from a reference video onto a still image, producing a new short
 
 ---
 
+> ## ⚖️ License & restrictions — read before using
+>
+> This project is a derivative of [Lightricks LTX-2](https://github.com/Lightricks/LTX-2) and is governed by the **[LTX-2 Community License Agreement](LICENSE)**. By cloning or using this repo you agree to those terms.
+>
+> - **Free for personal and small-business use.** Entities with annual revenue **≥ USD 10,000,000** must obtain a paid commercial license from Lightricks at https://ltx.io/model/licensing **before** any use. Unauthorized commercial use triggers liquidated damages equal to **2× the commercial fee** (LICENSE §2).
+> - **Use restrictions** (LICENSE Attachment A) — *prohibited:* deepfakes / impersonation without consent, content harming minors, disinformation, automated decision-making affecting legal rights, discrimination, harassment, and the full list in [LICENSE](LICENSE).
+> - **Derivative obligations** (LICENSE §3) — anyone who forks or modifies this repo must redistribute under the same LTX-2 Community License, ship the full [LICENSE](LICENSE) + [NOTICE](NOTICE), mark modified files prominently, and retain attribution.
+> - **Outputs** — you own the generated videos but must still comply with Attachment A.
+> - The Gemma 3 text encoder is © Google, used under the [Gemma Terms of Use](https://ai.google.dev/gemma/terms).
+>
+> See [NOTICE](NOTICE) for the full third-party attribution and modified-file list.
+
+---
+
 ## How it works (layman's version)
 
 1. **Subject image** — locks in *who/what* appears in the output (the person, clothes, background style).
@@ -187,8 +201,8 @@ Internally, `main.py`:
 
 ---
 
-## License & credits
+## License & attribution
 
-- This project builds on [Lightricks LTX-2](https://huggingface.co/Lightricks/LTX-2.3). Source code in `packages/` is governed by the [LTX-2 Community License Agreement](LICENSE).
-- The Gemma 3 text encoder is © Google, used under the [Gemma Terms of Use](https://ai.google.dev/gemma/terms).
-- Pipeline: `ICLoraPipeline` from [packages/ltx-pipelines/src/ltx_pipelines/ic_lora.py](packages/ltx-pipelines/src/ltx_pipelines/ic_lora.py).
+See the [License & restrictions](#️-license--restrictions--read-before-using) callout at the top of this README, the full [LICENSE](LICENSE), and [NOTICE](NOTICE) for the complete attribution and modified-file list.
+
+Pipeline source: [packages/ltx-pipelines/src/ltx_pipelines/ic_lora.py](packages/ltx-pipelines/src/ltx_pipelines/ic_lora.py).
