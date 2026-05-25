@@ -1,3 +1,6 @@
+# Modified from Lightricks LTX-2 by Flam, 2026-05-25 (LTX-2 Community License §3(c)):
+# - Added `LTX_TEXT_ENCODER_CPU` env-var branch in `text_encoder()` so the Gemma
+#   model can be loaded on CPU instead of GPU on low-VRAM hardware.
 import os
 from dataclasses import replace
 

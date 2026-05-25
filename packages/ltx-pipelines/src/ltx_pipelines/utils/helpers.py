@@ -1,3 +1,7 @@
+# Modified from Lightricks LTX-2 by Flam, 2026-05-25 (LTX-2 Community License §3(c)):
+# - Added `LTX_TEXT_ENCODER_CPU` env-var support in `encode_prompts` so the
+#   Gemma text encoder can run on CPU and its hidden states are moved to the
+#   target device before the embeddings processor runs (fixes OOM on 24 GB GPUs).
 import gc
 import logging
 import os
