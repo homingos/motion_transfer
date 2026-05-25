@@ -20,6 +20,10 @@ checkpoints/
 tmp
 .wandb
 
+# Local-only directories (downloaded weights and generated outputs)
+models/
+outputs/
+
 # Model checkpoints
 *.ckpt
 *.pt
@@ -39,3 +43,6 @@ tmp
 *.png
 *.wav
 *.webp
+
+# Exceptions: ship the default reference video that main.py uses
+!assets/idle_avatar_15_reverse.mp4
