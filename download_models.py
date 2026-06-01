@@ -82,10 +82,15 @@ def download_lightricks() -> None:
         )
 
 
+def gemma_present() -> bool:
+    target_dir = MODELS / "gemma"
+    return (target_dir / "model.safetensors.index.json").exists() and any(target_dir.glob("model-*.safetensors"))
+
+
 def download_gemma(token: str | None) -> None:
     target_dir = MODELS / "gemma"
     target_dir.mkdir(parents=True, exist_ok=True)
-    if (target_dir / "model.safetensors.index.json").exists() and any(target_dir.glob("model-*.safetensors")):
+    if gemma_present():
         print(f"[skip] models/gemma already populated")
         return
     print(f"[get ] {GEMMA_REPO} (~23 GB across 5 shards)")
@@ -113,15 +118,17 @@ def main() -> None:
 
     download_lightricks()
 
-    token = get_hf_token()
-    if token is None:
-        print(
-            f"\nGemma 3 ({GEMMA_REPO}) is gated. "
-            "Paste a HuggingFace read token (input hidden), or press Ctrl-C to abort:"
-        )
-        token = getpass.getpass("HF token: ").strip() or None
-
-    download_gemma(token)
+    if gemma_present():
+        print(f"[skip] models/gemma already populated")
+    else:
+        token = get_hf_token()
+        if token is None:
+            print(
+                f"\nGemma 3 ({GEMMA_REPO}) is gated. "
+                "Paste a HuggingFace read token (input hidden), or press Ctrl-C to abort:"
+            )
+            token = getpass.getpass("HF token: ").strip() or None
+        download_gemma(token)
     print("\nAll downloads complete. You can now run: python main.py <image>")
 
 

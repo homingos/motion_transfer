@@ -37,7 +37,13 @@ The output is a silent MP4 (audio is stripped automatically).
 
 ---
 
+
+
 ## Quick start
+# lightning.ai
+source ltx/bin/activate
+python main.py assets/images/avatar_15.png
+
 
 ```bash
 # 1. Clone

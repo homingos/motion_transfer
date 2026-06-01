@@ -10,16 +10,18 @@ API: POST /generate (multipart), then GET /jobs/{id} to poll, then GET /jobs/{id
 """
 
 import os
-import subprocess
-import sys
 import threading
 import uuid
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
+
+import pipeline_runtime
 
 ROOT = Path(__file__).resolve().parent
 UPLOADS = ROOT / "uploads"
@@ -30,7 +32,21 @@ DEFAULT_VIDEO = ROOT / "assets" / "idle_avatar_15_reverse.mp4"
 UPLOADS.mkdir(parents=True, exist_ok=True)
 OUTPUTS.mkdir(parents=True, exist_ok=True)
 
-app = FastAPI(title="LTX-2 Motion Transfer")
+@asynccontextmanager
+async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
+    # Build the pipeline object (cheap: reads metadata, wires the weight cache).
+    # Model weights load lazily on the first /generate call. Fails fast here if
+    # any model file is missing.
+    pipeline_runtime.warmup()
+    # Optionally absorb the slow cold model-load now, so the first real request is
+    # already warm (~42s) instead of paying ~minutes. Runs on a background thread
+    # so the server still binds its port immediately. Enable with WARMUP_ON_STARTUP=1.
+    if os.environ.get("WARMUP_ON_STARTUP") == "1":
+        threading.Thread(target=pipeline_runtime.prewarm_weights, name="prewarm", daemon=True).start()
+    yield
+
+
+app = FastAPI(title="LTX-2 Motion Transfer", lifespan=_lifespan)
 
 # In-memory job registry. Persists only for the server's lifetime.
 JOBS: dict[str, dict] = {}
@@ -49,30 +65,29 @@ def _set(job_id: str, **fields) -> None:
 
 
 def run_job(job_id: str, image_path: Path, video_path: Path, prompt: str | None) -> None:
-    """Run main.py as a subprocess and capture status."""
+    """Run the warm in-process pipeline and capture status.
+
+    The pipeline keeps its weights resident in CPU RAM (shared StateDictRegistry),
+    so only the first job pays the cold weight-load cost; later jobs are faster.
+    pipeline_runtime serialises GPU access internally via its own lock.
+    """
     _set(job_id, status="waiting_for_gpu")
     with _GPU_LOCK:
         _set(job_id, status="running", started_at=_now())
         output_path = OUTPUTS / f"api_{job_id}.mp4"
-        cmd = [
-            sys.executable, str(ROOT / "main.py"),
-            str(image_path),
-            "--video", str(video_path),
-            "--output", str(output_path),
-        ]
-        if prompt:
-            cmd.extend(["--prompt", prompt])
-
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
-            if result.returncode == 0 and output_path.exists():
+            pipeline_runtime.generate(
+                image_path=str(image_path),
+                output_path=str(output_path),
+                video_path=str(video_path),
+                prompt=prompt or None,
+            )
+            if output_path.exists():
                 _set(job_id, status="done", finished_at=_now(),
                      result=str(output_path.relative_to(ROOT)))
             else:
                 _set(job_id, status="failed", finished_at=_now(),
-                     error=(result.stderr or result.stdout or "")[-2000:])
-        except subprocess.TimeoutExpired:
-            _set(job_id, status="failed", finished_at=_now(), error="timed out after 30 min")
+                     error="generation finished but no output file was produced")
         except Exception as e:
             _set(job_id, status="failed", finished_at=_now(), error=repr(e))
 
@@ -152,9 +167,12 @@ if __name__ == "__main__":
 
     bar = "=" * 60
     display_host = "localhost" if host in ("127.0.0.1", "0.0.0.0") else host
+    warm = "on (first request will be warm)" if os.environ.get("WARMUP_ON_STARTUP") == "1" \
+        else "off (first request loads the model, ~minutes)"
     print(f"\n{bar}\n  LTX-2 Motion Transfer server\n"
           f"  ➜ UI:  http://{display_host}:{port}/\n"
           f"  ➜ API: http://{display_host}:{port}/generate (POST multipart)\n"
+          f"  Pre-warm on startup: {warm}\n"
           f"  Bound to {host}:{port}.  Ctrl-C to quit.\n{bar}\n", flush=True)
 
     uvicorn.run(app, host=host, port=port, log_level="info")

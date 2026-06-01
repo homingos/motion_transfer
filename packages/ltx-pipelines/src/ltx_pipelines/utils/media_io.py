@@ -1,3 +1,7 @@
+# Modified from Lightricks LTX-2 by Flam, 2026-06-01 (LTX-2 Community License §3(c)):
+# - `decode_image` now converts to RGB before array conversion, so palette ("P"),
+#   grayscale ("L") and RGBA inputs yield a 3-channel (H, W, 3) array instead of
+#   a 2D array that the rgb24 encoder rejects.
 import logging
 import math
 from collections.abc import Generator, Iterator
@@ -116,8 +120,11 @@ def load_video_conditioning(
 
 
 def decode_image(image_path: str) -> np.ndarray:
-    image = Image.open(image_path)
-    np_array = np.array(image)[..., :3]
+    # Convert to RGB first so palette ("P"), grayscale ("L") and RGBA images all
+    # produce a 3-channel (H, W, 3) array; a bare np.array() of a non-RGB image is
+    # 2D (or 4-channel) and breaks downstream rgb24 encoding.
+    image = Image.open(image_path).convert("RGB")
+    np_array = np.array(image)
     return np_array
 
 

@@ -22,7 +22,15 @@ tmp
 
 # Local-only directories (downloaded weights and generated outputs)
 models/
+models
 outputs/
+
+# Local-only operational doc
+HOSTING.md
+
+# Local venv symlink and scratch logs
+ltx
+*.log
 
 # Model checkpoints
 *.ckpt

@@ -1,9 +1,15 @@
+# Modified from Lightricks LTX-2 by Flam, 2026-06-01 (LTX-2 Community License §3(c)):
+# - Added optional `registry` parameter to `ICLoraPipeline` so a shared
+#   `StateDictRegistry` can cache model weights across pipeline calls (warm
+#   in-process serving), instead of re-reading them from disk on every call.
 import logging
 from collections.abc import Iterator
 
 import torch
 from einops import rearrange
 from safetensors import safe_open
+
+from ltx_core.loader.registry import Registry
 
 from ltx_core.components.diffusion_steps import EulerDiffusionStep
 from ltx_core.components.noisers import GaussianNoiser
@@ -68,8 +74,12 @@ class ICLoraPipeline:
         loras: list[LoraPathStrengthAndSDOps],
         device: torch.device = device,
         quantization: QuantizationPolicy | None = None,
+        registry: Registry | None = None,
     ):
         self.dtype = torch.bfloat16
+        # A shared registry caches loaded state dicts so the base checkpoint is
+        # read from disk once and reused by both stages (and across calls when the
+        # same registry instance is reused). When None, each build re-reads weights.
         self.stage_1_model_ledger = ModelLedger(
             dtype=self.dtype,
             device=device,
@@ -78,6 +88,7 @@ class ICLoraPipeline:
             gemma_root_path=gemma_root,
             loras=loras,
             quantization=quantization,
+            registry=registry,
         )
         self.stage_2_model_ledger = ModelLedger(
             dtype=self.dtype,
@@ -87,6 +98,7 @@ class ICLoraPipeline:
             gemma_root_path=gemma_root,
             loras=[],
             quantization=quantization,
+            registry=registry,
         )
         self.pipeline_components = PipelineComponents(
             dtype=self.dtype,
