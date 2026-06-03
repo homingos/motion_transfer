@@ -41,7 +41,8 @@ The output is a silent MP4 (audio is stripped automatically).
 
 ## Quick start
 # lightning.ai
-source ltx/bin/activate
+<!-- source ltx/bin/activate -->
+./ltx/bin/python server.py ==> to serve
 python main.py assets/images/avatar_15.png
 
 
@@ -212,3 +213,6 @@ Internally, `main.py`:
 See the [License & restrictions](#️-license--restrictions--read-before-using) callout at the top of this README, the full [LICENSE](LICENSE), and [NOTICE](NOTICE) for the complete attribution and modified-file list.
 
 Pipeline source: [packages/ltx-pipelines/src/ltx_pipelines/ic_lora.py](packages/ltx-pipelines/src/ltx_pipelines/ic_lora.py).
+
+
+lsof -ti:8000 | xargs -r kill

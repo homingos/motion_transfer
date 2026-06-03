@@ -35,12 +35,16 @@ from ltx_core.loader.registry import StateDictRegistry
 from ltx_core.model.video_vae import TilingConfig, get_video_chunks_number
 from ltx_core.quantization import QuantizationPolicy
 from ltx_pipelines.ic_lora import ICLoraPipeline
+from ltx_pipelines.utils import timing as T
 from ltx_pipelines.utils.args import ImageConditioningInput, resolve_path
 from ltx_pipelines.utils.media_io import encode_video
+
+import json
 
 logger = logging.getLogger(__name__)
 
 ROOT = Path(__file__).resolve().parent
+TIMINGS_LOG = ROOT / "timings.jsonl"
 MODELS = ROOT / "models"
 ASSETS = ROOT / "assets"
 
@@ -186,6 +190,7 @@ def generate(
         logger.info("[runtime] generating (%s start): %s -> %s",
                     "warm" if warm else "cold", Path(image_abs).name, Path(out_abs).name)
 
+        T.begin()
         video, _audio = pipeline(
             prompt=prompt,
             seed=seed,
@@ -200,8 +205,10 @@ def generate(
             skip_stage_2=skip_stage_2,
             conditioning_attention_mask=None,
         )
+        spans = T.report()
 
         # audio=None -> silent output, equivalent to main.py's post-hoc audio strip.
+        t_enc = time.perf_counter()
         encode_video(
             video=video,
             fps=int(frame_rate),
@@ -209,8 +216,45 @@ def generate(
             output_path=out_abs,
             video_chunks_number=video_chunks_number,
         )
+        spans.append(("mp4_encode", time.perf_counter() - t_enc))
+
+        total = time.perf_counter() - t0
         logger.info("[runtime] done in %.1fs (cached state dicts: %d) -> %s",
-                    time.perf_counter() - t0,
-                    0 if _REGISTRY is None else len(_REGISTRY._state_dicts), out_abs)
+                    total, 0 if _REGISTRY is None else len(_REGISTRY._state_dicts), out_abs)
+        _write_timing_report(spans, total, warm, num_frames, height, width, out_abs)
 
     return out_abs
+
+
+def _write_timing_report(spans: list[tuple[str, float]], total: float, warm: bool,
+                         num_frames: int, height: int, width: int, out_abs: str) -> None:
+    """Append a structured per-phase timing record to timings.jsonl and log a table.
+
+    ``warm`` reflects whether weights were already cached when the run started, so a
+    cold record shows the one-time model-load cost (the build_* phases dominate) and a
+    warm record shows steady-state per-request compute.
+    """
+    measured = sum(dt for _, dt in spans)
+    record = {
+        "kind": "warm" if warm else "cold",
+        "total_s": round(total, 3),
+        "measured_s": round(measured, 3),
+        "unattributed_s": round(total - measured, 3),
+        "num_frames": num_frames,
+        "height": height,
+        "width": width,
+        "output": Path(out_abs).name,
+        "phases": [{"name": n, "secs": round(dt, 3)} for n, dt in spans],
+    }
+    try:
+        with TIMINGS_LOG.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(record) + "\n")
+    except Exception as e:  # pragma: no cover - logging must never break a run
+        logger.warning("[timing] could not write %s: %r", TIMINGS_LOG, e)
+
+    lines = [f"[timing] ===== {record['kind'].upper()} run breakdown ({total:.1f}s total) ====="]
+    for n, dt in spans:
+        pct = 100.0 * dt / total if total else 0.0
+        bar = "#" * int(round(pct / 2))
+        lines.append(f"[timing] {n:<24} {dt:8.2f}s {pct:5.1f}% {bar}")
+    logger.info("\n".join(lines))

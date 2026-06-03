@@ -5,165 +5,296 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>LTX-2 Motion Transfer</title>
   <style>
-    :root { color-scheme: light dark; }
-    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; max-width: 760px; margin: 2rem auto; padding: 0 1rem; line-height: 1.45; }
-    h1 { margin-bottom: 0.25rem; }
-    p.subtitle { color: #888; margin-top: 0; }
-    form { display: grid; gap: 1rem; margin: 1.5rem 0; padding: 1.25rem; border: 1px solid #ccc4; border-radius: 8px; }
-    label { display: grid; gap: 0.35rem; font-weight: 600; font-size: 0.95rem; }
-    label small { font-weight: 400; color: #888; }
-    input[type="file"], textarea { font: inherit; padding: 0.4rem; border: 1px solid #ccc4; border-radius: 4px; background: transparent; color: inherit; }
-    textarea { resize: vertical; min-height: 3.5rem; }
-    button { font: inherit; padding: 0.6rem 1.2rem; border: none; border-radius: 6px; background: #4f46e5; color: white; font-weight: 600; cursor: pointer; }
-    button:disabled { background: #999; cursor: not-allowed; }
-    .hint { color: #888; font-size: 0.85rem; }
-    #status { padding: 0.75rem 1rem; border-radius: 6px; background: #4f46e510; border: 1px solid #4f46e530; min-height: 1.5em; }
-    #status.failed { background: #ef444420; border-color: #ef444450; }
-    #status.done { background: #10b98120; border-color: #10b98150; }
-    .panels { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-top: 1rem; }
-    .panel h3 { margin: 0 0 0.5rem 0; font-size: 0.9rem; font-weight: 600; color: #888; text-transform: uppercase; letter-spacing: 0.05em; }
-    .panel img, .panel video { width: 100%; aspect-ratio: 1 / 1; object-fit: contain; border-radius: 8px; background: black; }
-    .meta { color: #888; font-size: 0.85rem; margin-top: 0.4rem; }
-    code { background: #8884; padding: 0.1em 0.35em; border-radius: 3px; font-size: 0.9em; }
+    :root {
+      --bg: #0b0c10; --bg-grad-1: #1a1640;
+      --card: #15161d; --card-2: #1c1e27; --border: #2a2c38;
+      --text: #e9eaf0; --muted: #9296a8; --faint: #6b6f80;
+      --accent: #7c6cff; --accent-2: #b06cff;
+      --ok: #2dd4a8; --err: #ff6b6b;
+      --radius: 16px; --shadow: 0 10px 40px rgba(0,0,0,0.35);
+    }
+    @media (prefers-color-scheme: light) {
+      :root {
+        --bg: #f6f6fb; --bg-grad-1: #ece9ff;
+        --card: #ffffff; --card-2: #f4f4fa; --border: #e5e6ef;
+        --text: #1b1c24; --muted: #6b6f80; --faint: #9aa0b4;
+        --shadow: 0 10px 40px rgba(60,50,120,0.10);
+      }
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, system-ui, sans-serif;
+      color: var(--text);
+      background: radial-gradient(1200px 600px at 50% -10%, var(--bg-grad-1), transparent 60%), var(--bg);
+      min-height: 100vh; line-height: 1.5; -webkit-font-smoothing: antialiased;
+    }
+    .wrap { max-width: 1100px; margin: 0 auto; padding: 3rem 1.25rem 4rem; }
+
+    header { text-align: center; margin-bottom: 2rem; }
+    .badge {
+      display: inline-flex; align-items: center; gap: 0.45rem;
+      font-size: 0.72rem; font-weight: 600; letter-spacing: 0.12em; text-transform: uppercase;
+      color: var(--accent-2); background: color-mix(in srgb, var(--accent) 14%, transparent);
+      border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+      padding: 0.35rem 0.8rem; border-radius: 999px; margin-bottom: 1rem;
+    }
+    .badge .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 25%, transparent); }
+    h1 {
+      font-size: clamp(1.9rem, 4.5vw, 2.8rem); margin: 0 0 0.4rem; font-weight: 750; letter-spacing: -0.02em;
+      background: linear-gradient(100deg, var(--text), var(--accent-2));
+      -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
+    }
+    .subtitle { color: var(--muted); margin: 0 auto; max-width: 34rem; font-size: 1rem; }
+
+    .card {
+      background: linear-gradient(180deg, var(--card), var(--card-2));
+      border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); padding: 1.5rem;
+    }
+    form { display: grid; grid-template-columns: 1fr 1fr; gap: 1.1rem; }
+    .field { display: grid; gap: 0.5rem; }
+    .field.wide { grid-column: 1 / -1; }
+    .field > .lab { font-weight: 650; font-size: 0.9rem; display: flex; align-items: baseline; gap: 0.5rem; flex-wrap: wrap; }
+    .field .opt { font-weight: 400; color: var(--faint); font-size: 0.8rem; }
+
+    .drop {
+      position: relative; display: flex; align-items: center; gap: 0.9rem;
+      padding: 1rem 1.1rem; border: 1.5px dashed var(--border); border-radius: 12px;
+      background: color-mix(in srgb, var(--card-2) 60%, transparent);
+      cursor: pointer; transition: border-color .15s, background .15s; min-height: 72px;
+    }
+    .drop:hover { border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); }
+    .drop.drag { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
+    .drop.has-file { border-style: solid; border-color: color-mix(in srgb, var(--ok) 45%, var(--border)); }
+    .drop input[type=file] { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+    .drop .ic { flex: none; width: 40px; height: 40px; border-radius: 10px; display: grid; place-items: center; background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent-2); font-size: 1.2rem; }
+    .drop .txt { display: grid; gap: 1px; min-width: 0; }
+    .drop .txt b { font-weight: 600; font-size: 0.9rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .drop .txt span { color: var(--muted); font-size: 0.8rem; }
+    .drop.has-file .txt b { color: var(--ok); }
+
+    textarea { font: inherit; color: inherit; padding: 0.75rem 0.9rem; border-radius: 12px; border: 1.5px solid var(--border); background: color-mix(in srgb, var(--card-2) 60%, transparent); resize: vertical; min-height: 3rem; transition: border-color .15s; width: 100%; }
+    textarea:focus { outline: none; border-color: var(--accent); }
+
+    button.gen {
+      grid-column: 1 / -1; font: inherit; font-weight: 700; font-size: 1rem; color: #fff; cursor: pointer;
+      border: none; border-radius: 12px; padding: 0.9rem 1.2rem;
+      background: linear-gradient(100deg, var(--accent), var(--accent-2));
+      box-shadow: 0 6px 20px color-mix(in srgb, var(--accent) 40%, transparent);
+      transition: transform .06s, filter .15s, opacity .15s; display: inline-flex; align-items: center; justify-content: center; gap: 0.6rem;
+    }
+    button.gen:hover:not(:disabled) { filter: brightness(1.07); }
+    button.gen:active:not(:disabled) { transform: translateY(1px); }
+    button.gen:disabled { cursor: not-allowed; opacity: 0.75; background: linear-gradient(100deg, #6a6a78, #7a7a88); box-shadow: none; }
+    .spinner { width: 16px; height: 16px; border: 2.5px solid rgba(255,255,255,.45); border-top-color: #fff; border-radius: 50%; animation: spin .7s linear infinite; display: none; }
+    button.gen.loading .spinner { display: inline-block; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .hint { grid-column: 1 / -1; color: var(--faint); font-size: 0.82rem; margin: 0; text-align: center; }
+
+    #status { display: flex; align-items: center; gap: 0.6rem; margin: 1.5rem 0 0.4rem; padding: 0.85rem 1.1rem; border-radius: 12px; background: color-mix(in srgb, var(--accent) 9%, transparent); border: 1px solid color-mix(in srgb, var(--accent) 25%, transparent); font-size: 0.95rem; font-weight: 500; }
+    #status .sdot { width: 9px; height: 9px; border-radius: 50%; background: var(--accent); flex: none; }
+    #status.running .sdot { animation: pulse 1.2s ease-in-out infinite; }
+    #status.done { background: color-mix(in srgb, var(--ok) 13%, transparent); border-color: color-mix(in srgb, var(--ok) 35%, transparent); }
+    #status.done .sdot { background: var(--ok); }
+    #status.failed { background: color-mix(in srgb, var(--err) 13%, transparent); border-color: color-mix(in srgb, var(--err) 35%, transparent); }
+    #status.failed .sdot { background: var(--err); }
+    @keyframes pulse { 0%,100% { opacity: 1; transform: scale(1);} 50% { opacity: .4; transform: scale(.7);} }
+    .meta { color: var(--faint); font-size: 0.82rem; margin: 0 0 0 0.2rem; min-height: 1em; }
+
+    /* ---- 1 -> 2 -> 3 pipeline, equal-size panels ---- */
+    .pipeline { display: flex; align-items: stretch; gap: 0.75rem; margin-top: 1.5rem; }
+    .stage { flex: 1 1 0; min-width: 0; background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 0.9rem; display: flex; flex-direction: column; }
+    .stage .head { display: flex; align-items: center; gap: 0.55rem; margin-bottom: 0.6rem; }
+    .stage .num { flex: none; width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; font-size: 0.78rem; font-weight: 700; color: #fff; background: linear-gradient(135deg, var(--accent), var(--accent-2)); }
+    .stage.out .num { background: linear-gradient(135deg, var(--ok), #36c5e0); }
+    .stage h3 { margin: 0; font-size: 0.74rem; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: 0.07em; }
+    .media { position: relative; width: 100%; aspect-ratio: 1/1; border-radius: 12px; overflow: hidden; background: #000; display: grid; place-items: center; }
+    .media img, .media video { width: 100%; height: 100%; object-fit: contain; display: block; background: #000; }
+    .media .ph { position: absolute; inset: 0; display: grid; place-items: center; gap: 0.4rem; color: var(--faint); font-size: 0.82rem; text-align: center; padding: 1rem; pointer-events: none; }
+    .media .ph .pic { font-size: 1.6rem; opacity: 0.7; }
+    .media.filled .ph { display: none; }
+    .tag { margin-top: 0.55rem; font-size: 0.76rem; color: var(--faint); text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .arrow { flex: none; align-self: center; color: var(--accent-2); font-size: 1.5rem; opacity: 0.8; }
+
+    footer { text-align: center; color: var(--faint); font-size: 0.8rem; margin-top: 2.5rem; }
+    footer code { background: color-mix(in srgb, var(--muted) 18%, transparent); padding: 0.12em 0.4em; border-radius: 5px; font-size: 0.9em; }
+
+    @media (max-width: 780px) {
+      form { grid-template-columns: 1fr; }
+      .pipeline { flex-direction: column; }
+      .arrow { transform: rotate(90deg); align-self: center; }
+    }
   </style>
 </head>
 <body>
-  <h1>LTX-2 Motion Transfer</h1>
-  <p class="subtitle">Upload an image. Optionally upload a reference motion video. Get back a silent MP4 where your image moves like the reference.</p>
+  <div class="wrap">
+    <header>
+      <div class="badge"><span class="dot"></span> LTX-2 · Motion Transfer</div>
+      <h1>Bring a photo to life</h1>
+      <p class="subtitle">Give it an image and a reference motion — get back a video of your image moving the same way.</p>
+    </header>
 
-  <form id="form">
-    <label>
-      Subject image (PNG / JPG)
-      <input type="file" name="image" accept="image/*" required />
-    </label>
-
-    <label>
-      Reference motion video <small>(optional &mdash; defaults to <code>assets/idle_avatar_15_reverse.mp4</code>)</small>
-      <input type="file" name="video" accept="video/*" />
-    </label>
-
-    <label>
-      Prompt <small>(optional &mdash; falls back to the talking-head default in <code>main.py</code>)</small>
-      <textarea name="prompt" rows="2" placeholder="e.g. a person smiling and looking around, photorealistic"></textarea>
-    </label>
-
-    <button type="submit" id="submit">Generate</button>
-    <p class="hint">Generation takes about <strong>5–7 minutes</strong> per request on the connected GPU (most of which is loading the 45&nbsp;GB checkpoint).</p>
-  </form>
-
-  <div id="status">Ready.</div>
-  <p class="meta" id="meta"></p>
-
-  <div class="panels">
-    <div class="panel">
-      <h3>Subject image</h3>
-      <img id="imagePreview" alt="Uploaded subject image will appear here" />
+    <div class="card">
+      <form id="form">
+        <div class="field">
+          <div class="lab">Subject image <span class="opt">PNG / JPG · required</span></div>
+          <label class="drop" id="dropImage">
+            <input type="file" name="image" accept="image/*" required />
+            <div class="ic">🖼️</div>
+            <div class="txt"><b id="imageName">Click or drop an image</b><span>The person who will move</span></div>
+          </label>
+        </div>
+        <div class="field">
+          <div class="lab">Reference motion <span class="opt">optional · uses default if empty</span></div>
+          <label class="drop" id="dropVideo">
+            <input type="file" name="video" accept="video/*" />
+            <div class="ic">🎬</div>
+            <div class="txt"><b id="videoName">Click or drop a video</b><span>The motion to copy</span></div>
+          </label>
+        </div>
+        <div class="field wide">
+          <div class="lab">Prompt <span class="opt">optional · a sensible default is used if blank</span></div>
+          <textarea name="prompt" rows="2" placeholder="e.g. a person smiling and looking around, photorealistic, soft studio lighting"></textarea>
+        </div>
+        <button type="submit" id="submit" class="gen"><span class="spinner"></span><span id="btnText">Generate video</span></button>
+        <p class="hint">Warm requests take about <strong>40 seconds</strong>. The first request after a restart loads the model and can take several minutes.</p>
+      </form>
     </div>
-    <div class="panel">
-      <h3>Generated video</h3>
-      <video id="result" controls playsinline poster=""></video>
-    </div>
-  </div>
 
-  <div class="panel" style="margin-top:1rem;">
-    <h3>Reference motion (input)</h3>
-    <video id="referencePreview" controls playsinline muted></video>
+    <div id="status"><span class="sdot"></span><span id="statusText">Ready.</span></div>
+    <p class="meta" id="meta"></p>
+
+    <!-- 1 -> 2 -> 3, equal-size panels -->
+    <div class="pipeline">
+      <div class="stage">
+        <div class="head"><span class="num">1</span><h3>Subject image</h3></div>
+        <div class="media" id="imageMedia">
+          <img id="imagePreview" alt="" />
+          <div class="ph"><span class="pic">🖼️</span> Upload an image</div>
+        </div>
+        <div class="tag" id="imageTag">input</div>
+      </div>
+
+      <div class="arrow">→</div>
+
+      <div class="stage">
+        <div class="head"><span class="num">2</span><h3>Reference motion</h3></div>
+        <div class="media" id="refMedia">
+          <video id="referencePreview" playsinline muted loop autoplay></video>
+          <div class="ph"><span class="pic">🎬</span> Reference clip</div>
+        </div>
+        <div class="tag" id="refTag">default clip</div>
+      </div>
+
+      <div class="arrow">→</div>
+
+      <div class="stage out">
+        <div class="head"><span class="num">3</span><h3>Generated video</h3></div>
+        <div class="media" id="resultMedia">
+          <video id="result" controls playsinline></video>
+          <div class="ph"><span class="pic">✨</span> Your result appears here</div>
+        </div>
+        <div class="tag" id="resultTag">output</div>
+      </div>
+    </div>
+
+    <footer>API: <code>POST /generate</code> → poll <code>GET /jobs/{id}</code> → <code>GET /jobs/{id}/result</code></footer>
   </div>
 
   <script>
     const form = document.getElementById("form");
     const statusEl = document.getElementById("status");
+    const statusText = document.getElementById("statusText");
     const metaEl = document.getElementById("meta");
     const submitBtn = document.getElementById("submit");
+    const btnText = document.getElementById("btnText");
     const resultEl = document.getElementById("result");
     const imagePreview = document.getElementById("imagePreview");
     const referencePreview = document.getElementById("referencePreview");
     const imageInput = form.elements["image"];
     const videoInput = form.elements["video"];
+    const imageMedia = document.getElementById("imageMedia");
+    const resultMedia = document.getElementById("resultMedia");
+    const refMedia = document.getElementById("refMedia");
+    const imageTag = document.getElementById("imageTag");
+    const refTag = document.getElementById("refTag");
 
-    // Show selected image immediately
-    imageInput.addEventListener("change", () => {
-      const f = imageInput.files[0];
-      if (f) imagePreview.src = URL.createObjectURL(f);
-    });
+    const DEFAULT_REF = "/static/default_reference.mp4";
 
-    // Show selected reference video, or fall back to the default
-    function setReference(src) { referencePreview.src = src; }
-    videoInput.addEventListener("change", () => {
-      const f = videoInput.files[0];
-      setReference(f ? URL.createObjectURL(f) : "/static/default_reference.mp4");
-    });
-    // Default on page load
-    setReference("/static/default_reference.mp4");
-
-    function setStatus(text, kind) {
-      statusEl.textContent = text;
-      statusEl.className = kind || "";
+    function wireDrop(zoneId, input, nameEl, onFile) {
+      const zone = document.getElementById(zoneId);
+      input.addEventListener("change", () => updateFile(input.files[0]));
+      ["dragover", "dragenter"].forEach(ev => zone.addEventListener(ev, e => { e.preventDefault(); zone.classList.add("drag"); }));
+      ["dragleave", "drop"].forEach(ev => zone.addEventListener(ev, e => { e.preventDefault(); zone.classList.remove("drag"); }));
+      zone.addEventListener("drop", e => {
+        const f = e.dataTransfer.files[0];
+        if (f) { const dt = new DataTransfer(); dt.items.add(f); input.files = dt.files; updateFile(f); }
+      });
+      function updateFile(f) {
+        if (f) { zone.classList.add("has-file"); nameEl.textContent = f.name; }
+        else { zone.classList.remove("has-file"); nameEl.textContent = nameEl.dataset.placeholder; }
+        onFile(f);
+      }
+      nameEl.dataset.placeholder = nameEl.textContent;
     }
 
-    async function pollJob(jobId, startedAt) {
+    wireDrop("dropImage", imageInput, document.getElementById("imageName"), (f) => {
+      if (f) { imagePreview.src = URL.createObjectURL(f); imageMedia.classList.add("filled"); imageTag.textContent = f.name; }
+      else { imageMedia.classList.remove("filled"); imageTag.textContent = "input"; }
+    });
+    wireDrop("dropVideo", videoInput, document.getElementById("videoName"), (f) => {
+      if (f) { setReference(URL.createObjectURL(f)); refTag.textContent = f.name; }
+      else { setReference(DEFAULT_REF); refTag.textContent = "default clip"; }
+    });
+
+    function setReference(src) { referencePreview.src = src; refMedia.classList.add("filled"); referencePreview.play().catch(()=>{}); }
+    setReference(DEFAULT_REF); // show the default video on load
+
+    let ticker = null, startedAt = 0, runningLabel = "";
+    function setStatus(text, kind) { statusText.textContent = text; statusEl.className = kind || ""; }
+    function startTicker(label) {
+      runningLabel = label; startedAt = Date.now(); stopTicker();
+      const tick = () => setStatus(`${runningLabel} · ${Math.round((Date.now() - startedAt) / 1000)}s`, "running");
+      tick(); ticker = setInterval(tick, 1000);
+    }
+    function stopTicker() { if (ticker) { clearInterval(ticker); ticker = null; } }
+    function resetButton() { submitBtn.disabled = false; submitBtn.classList.remove("loading"); btnText.textContent = "Generate video"; }
+
+    async function pollJob(jobId, started) {
       try {
         const r = await fetch(`/jobs/${jobId}`);
-        if (r.status === 404) {
-          setStatus(`Job ${jobId} was lost (server restarted). Submit again.`, "failed");
-          submitBtn.disabled = false;
-          submitBtn.textContent = "Generate";
-          return;
-        }
+        if (r.status === 404) { stopTicker(); setStatus(`Job ${jobId} was lost (server restarted). Submit again.`, "failed"); resetButton(); return; }
         if (!r.ok) throw new Error(`status ${r.status}`);
         const job = await r.json();
-        const elapsed = Math.round((Date.now() - startedAt) / 1000);
-        setStatus(`Job ${jobId} — ${job.status} (${elapsed}s)`);
-
+        const elapsed = Math.round((Date.now() - started) / 1000);
         if (job.status === "done") {
-          setStatus(`Done in ${elapsed}s. Job ${jobId}.`, "done");
-          resultEl.src = `/jobs/${jobId}/result`;
-          submitBtn.disabled = false;
-          submitBtn.textContent = "Generate";
+          stopTicker(); setStatus(`Done in ${elapsed}s.`, "done");
+          resultEl.src = `/jobs/${jobId}/result`; resultMedia.classList.add("filled"); resetButton();
         } else if (job.status === "failed") {
-          setStatus(`Failed: ${(job.error || "unknown").slice(0, 300)}`, "failed");
-          submitBtn.disabled = false;
-          submitBtn.textContent = "Generate";
+          stopTicker(); setStatus(`Failed: ${(job.error || "unknown").slice(0, 300)}`, "failed"); resetButton();
         } else {
-          setTimeout(() => pollJob(jobId, startedAt), 3000);
+          runningLabel = job.status === "running" ? "Generating" : `Queued (${job.status})`;
+          setTimeout(() => pollJob(jobId, started), 3000);
         }
-      } catch (e) {
-        setStatus(`Polling error: ${e.message}`, "failed");
-        submitBtn.disabled = false;
-        submitBtn.textContent = "Generate";
-      }
+      } catch (e) { stopTicker(); setStatus(`Polling error: ${e.message}`, "failed"); resetButton(); }
     }
 
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
-      resultEl.removeAttribute("src");
-
+      resultEl.removeAttribute("src"); resultMedia.classList.remove("filled");
       const fd = new FormData(form);
-      // FastAPI rejects empty optional file/form fields; strip them.
       const video = fd.get("video");
       if (!video || !video.size) fd.delete("video");
       if (!fd.get("prompt")) fd.delete("prompt");
-
-      submitBtn.disabled = true;
-      submitBtn.textContent = "Generating...";
-      setStatus("Uploading...");
-
+      submitBtn.disabled = true; submitBtn.classList.add("loading"); btnText.textContent = "Generating…";
+      startTicker("Uploading");
       try {
         const r = await fetch("/generate", { method: "POST", body: fd });
-        if (!r.ok) {
-          const txt = await r.text();
-          throw new Error(`${r.status} ${txt}`);
-        }
+        if (!r.ok) { const txt = await r.text(); throw new Error(`${r.status} ${txt}`); }
         const { job_id, image, video: vid, used_default_video } = await r.json();
-        metaEl.textContent =
-          `Image: ${image}  ·  Reference: ${vid}${used_default_video ? " (default)" : ""}  ·  Job: ${job_id}`;
-        setStatus(`Job ${job_id} queued.`);
-        pollJob(job_id, Date.now());
-      } catch (err) {
-        setStatus(`Submission failed: ${err.message}`, "failed");
-        submitBtn.disabled = false;
-        submitBtn.textContent = "Generate";
-      }
+        metaEl.textContent = `Image: ${image} · Reference: ${vid}${used_default_video ? " (default)" : ""} · Job: ${job_id}`;
+        startTicker("Generating"); pollJob(job_id, Date.now());
+      } catch (err) { stopTicker(); setStatus(`Submission failed: ${err.message}`, "failed"); resetButton(); }
     });
   </script>
 </body>

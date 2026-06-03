@@ -2,6 +2,8 @@
 # - Added optional `registry` parameter to `ICLoraPipeline` so a shared
 #   `StateDictRegistry` can cache model weights across pipeline calls (warm
 #   in-process serving), instead of re-reading them from disk on every call.
+# - 2026-06-02: Added per-phase timing ticks (ltx_pipelines.utils.timing) inside
+#   __call__ to profile where wall-clock goes. Read-only; no behaviour change.
 import logging
 from collections.abc import Iterator
 
@@ -37,6 +39,7 @@ from ltx_pipelines.utils import (
     get_device,
     simple_denoising_func,
 )
+from ltx_pipelines.utils import timing as T
 from ltx_pipelines.utils.args import (
     ImageConditioningInput,
     VideoConditioningAction,
@@ -180,6 +183,7 @@ class ICLoraPipeline:
         stepper = EulerDiffusionStep()
         dtype = torch.bfloat16
 
+        T.tick("prompt_encode")
         (ctx_p,) = encode_prompts(
             [prompt],
             self.stage_1_model_ledger,
@@ -199,7 +203,9 @@ class ICLoraPipeline:
         )
 
         # Encode conditionings before loading transformer to reduce peak VRAM
+        T.tick("build_video_encoder")
         video_encoder = self.stage_1_model_ledger.video_encoder()
+        T.tick("encode_conditionings_s1")
         stage_1_conditionings = self._create_conditionings(
             images=images,
             video_conditioning=video_conditioning,
@@ -211,6 +217,7 @@ class ICLoraPipeline:
             conditioning_attention_mask=conditioning_attention_mask,
         )
 
+        T.tick("build_transformer_s1")
         transformer = self.stage_1_model_ledger.transformer()
         stage_1_sigmas = torch.Tensor(DISTILLED_SIGMA_VALUES).to(self.device)
 
@@ -229,6 +236,7 @@ class ICLoraPipeline:
                 ),
             )
 
+        T.tick("denoise_stage1")
         video_state, audio_state = denoise_audio_video(
             output_shape=stage_1_output_shape,
             conditionings=stage_1_conditionings,
@@ -248,17 +256,21 @@ class ICLoraPipeline:
         if skip_stage_2:
             # Skip Stage 2: Decode directly from Stage 1 output at half resolution
             logging.info("[IC-LoRA] Skipping Stage 2 (--skip-stage-2 enabled)")
+            T.tick("decode_video")
             decoded_video = vae_decode_video(
                 video_state.latent, self.stage_1_model_ledger.video_decoder(), tiling_config, generator
             )
+            T.tick("decode_audio")
             decoded_audio = vae_decode_audio(
                 audio_state.latent, self.stage_1_model_ledger.audio_decoder(), self.stage_1_model_ledger.vocoder()
             )
             del video_encoder
             cleanup_memory()
+            T.end()
             return decoded_video, decoded_audio
 
         # Stage 2: Upsample and refine the video at higher resolution with distilled LORA.
+        T.tick("upsample_to_stage2")
         upscaled_video_latent = upsample_video(
             latent=video_state.latent[:1],
             video_encoder=video_encoder,
@@ -268,6 +280,7 @@ class ICLoraPipeline:
         torch.cuda.synchronize()
         cleanup_memory()
 
+        T.tick("build_transformer_s2")
         transformer = self.stage_2_model_ledger.transformer()
         distilled_sigmas = torch.Tensor(STAGE_2_DISTILLED_SIGMA_VALUES).to(self.device)
 
@@ -287,6 +300,7 @@ class ICLoraPipeline:
             )
 
         stage_2_output_shape = VideoPixelShape(batch=1, frames=num_frames, width=width, height=height, fps=frame_rate)
+        T.tick("encode_image_cond_s2")
         stage_2_conditionings = combined_image_conditionings(
             images=images,
             height=stage_2_output_shape.height,
@@ -296,6 +310,7 @@ class ICLoraPipeline:
             device=self.device,
         )
 
+        T.tick("denoise_stage2")
         video_state, audio_state = denoise_audio_video(
             output_shape=stage_2_output_shape,
             conditionings=stage_2_conditionings,
@@ -316,12 +331,15 @@ class ICLoraPipeline:
         del video_encoder
         cleanup_memory()
 
+        T.tick("decode_video")
         decoded_video = vae_decode_video(
             video_state.latent, self.stage_2_model_ledger.video_decoder(), tiling_config, generator
         )
+        T.tick("decode_audio")
         decoded_audio = vae_decode_audio(
             audio_state.latent, self.stage_2_model_ledger.audio_decoder(), self.stage_2_model_ledger.vocoder()
         )
+        T.end()
         return decoded_video, decoded_audio
 
     def _create_conditionings(
