@@ -191,7 +191,7 @@
       <div class="stage out">
         <div class="head"><span class="num">3</span><h3>Generated video</h3></div>
         <div class="media" id="resultMedia">
-          <video id="result" controls playsinline></video>
+          <video id="result" controls playsinline muted loop autoplay></video>
           <div class="ph"><span class="pic">✨</span> Your result appears here</div>
         </div>
         <div class="tag" id="resultTag">output</div>
@@ -269,7 +269,7 @@
         const elapsed = Math.round((Date.now() - started) / 1000);
         if (job.status === "done") {
           stopTicker(); setStatus(`Done in ${elapsed}s.`, "done");
-          resultEl.src = `/jobs/${jobId}/result`; resultMedia.classList.add("filled"); resetButton();
+          resultEl.src = `/jobs/${jobId}/result`; resultMedia.classList.add("filled"); resultEl.loop = true; resultEl.play().catch(()=>{}); resetButton();
         } else if (job.status === "failed") {
           stopTicker(); setStatus(`Failed: ${(job.error || "unknown").slice(0, 300)}`, "failed"); resetButton();
         } else {

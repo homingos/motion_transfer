@@ -45,7 +45,9 @@ logger = logging.getLogger(__name__)
 
 ROOT = Path(__file__).resolve().parent
 TIMINGS_LOG = ROOT / "timings.jsonl"
-MODELS = ROOT / "models"
+# Storage location for model weights. Defaults to ROOT/models locally; on Modal
+# it's set (via LTX_MODELS_DIR) to the mounted `motion-transfer-models` volume.
+MODELS = Path(os.environ.get("LTX_MODELS_DIR", str(ROOT / "models")))
 ASSETS = ROOT / "assets"
 
 # Bundled sample used to pre-warm the weight cache at startup.
@@ -142,6 +144,56 @@ def prewarm_weights() -> None:
         generate(image_path=str(SAMPLE_IMAGE), output_path=out, video_path=str(SAMPLE_VIDEO))
     logger.info("[runtime] pre-warm complete in %.1fs; %d state dicts cached. Requests are now warm.",
                 time.perf_counter() - t0, 0 if _REGISTRY is None else len(_REGISTRY._state_dicts))
+
+
+# Accessors used by a real generation; calling each populates the shared registry.
+# (audio_encoder is intentionally excluded — generate() never uses it.)
+_PRELOAD_ACCESSORS = (
+    "text_encoder", "gemma_embeddings_processor", "video_encoder", "video_decoder",
+    "audio_decoder", "vocoder", "spatial_upsampler", "transformer",
+)
+
+
+def preload_weights_cpu() -> None:
+    """Populate the shared StateDictRegistry on CPU only — for Modal memory snapshots.
+
+    Builds every model the pipeline uses via the ledger accessors with the ledger's device
+    forced to CPU, so the registry is filled with the exact (fp8-chained) keys ``generate()``
+    later looks up — a later GPU request then hits the cache instead of re-reading ~67 GB.
+
+    MUST stay CUDA-free: this runs inside Modal's ``@modal.enter(snap=True)`` phase where no GPU
+    exists; any ``torch.cuda.*`` call (e.g. ``cleanup_memory``) would init CUDA with zero devices
+    and corrupt the snapshot. Forcing ledger.device=cpu makes each accessor's trailing
+    ``.to(self.device)`` a no-op, and we never call cleanup_memory here.
+    """
+    t0 = time.perf_counter()
+    logger.info("[snapshot] preloading all weights to CPU (no GPU)...")
+    with _LOCK:
+        pipeline = _build_pipeline()
+        ledgers = [
+            getattr(pipeline, "stage_1_model_ledger", None),
+            getattr(pipeline, "stage_2_model_ledger", None),
+        ]
+        for ledger in ledgers:
+            if ledger is None:
+                continue
+            saved_device = ledger.device
+            ledger.device = torch.device("cpu")  # make the accessors' .to(device) a CPU no-op
+            try:
+                for name in _PRELOAD_ACCESSORS:
+                    accessor = getattr(ledger, name, None)
+                    if accessor is None:
+                        continue
+                    try:
+                        model = accessor()  # side effect: registry populated on CPU
+                        del model
+                    except ValueError:
+                        pass  # builder not present on this ledger — skip
+            finally:
+                ledger.device = saved_device
+    n = 0 if _REGISTRY is None else len(_REGISTRY._state_dicts)
+    logger.info("[snapshot] CPU preload complete in %.1fs; %d state dicts cached.",
+                time.perf_counter() - t0, n)
 
 
 @torch.inference_mode()

@@ -30,7 +30,8 @@ from huggingface_hub import hf_hub_download, snapshot_download
 from huggingface_hub.errors import GatedRepoError, RepositoryNotFoundError
 
 ROOT = Path(__file__).resolve().parent
-MODELS = ROOT / "models"
+# Honor LTX_MODELS_DIR (set on Modal to the mounted volume); default ROOT/models.
+MODELS = Path(os.environ.get("LTX_MODELS_DIR", str(ROOT / "models")))
 
 LIGHTRICKS_FILES = [
     {

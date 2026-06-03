@@ -22,6 +22,7 @@ from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 import pipeline_runtime
+import integrations
 
 ROOT = Path(__file__).resolve().parent
 UPLOADS = ROOT / "uploads"
@@ -92,6 +93,37 @@ def run_job(job_id: str, image_path: Path, video_path: Path, prompt: str | None)
             _set(job_id, status="failed", finished_at=_now(), error=repr(e))
 
 
+def run_idle_job(job_id: str, avatar_id: str, image_path: Path, video_path: Path, prompt: str | None) -> None:
+    """Generate the idle-motion video for an avatar, tracking status in MongoDB and
+    uploading the result to R2.
+
+    DB lifecycle on the `Faceshot.idle_motion` doc keyed by `avatarid`:
+      processing  ->  done processing (+ link)   on success
+      processing  ->  failed                     on any error / no output
+    """
+    _set(job_id, status="waiting_for_gpu", avatar_id=avatar_id)
+    integrations.set_status(avatar_id, "processing")
+    with _GPU_LOCK:
+        _set(job_id, status="running", started_at=_now())
+        output_path = OUTPUTS / f"idle_{avatar_id}_{job_id}.mp4"
+        try:
+            pipeline_runtime.generate(
+                image_path=str(image_path),
+                output_path=str(output_path),
+                video_path=str(video_path),
+                prompt=prompt or None,
+            )
+            if not output_path.exists():
+                raise RuntimeError("generation finished but no output file was produced")
+            link = integrations.r2_upload(output_path, key=f"idle_motion/{avatar_id}.mp4")
+            _set(job_id, status="done", finished_at=_now(),
+                 result=str(output_path.relative_to(ROOT)), link=link)
+            integrations.set_status(avatar_id, "done processing", link=link)
+        except Exception as e:
+            _set(job_id, status="failed", finished_at=_now(), error=repr(e))
+            integrations.set_status(avatar_id, "failed")
+
+
 @app.get("/", response_class=HTMLResponse)
 def index() -> str:
     return (STATIC / "index.html").read_text(encoding="utf-8")
@@ -133,6 +165,40 @@ async def generate(
         }
 
     threading.Thread(target=run_job, args=(job_id, image_path, video_path, prompt), daemon=True).start()
+    return {"job_id": job_id, **JOBS[job_id]}
+
+
+@app.post("/idle-motion")
+async def idle_motion(
+    image: UploadFile = File(..., description="Subject image (PNG or JPG)"),
+    avatar_id: str = Form(..., description="Avatar id — the key written to Faceshot.idle_motion"),
+):
+    """Generate an idle-motion video for an avatar using the default reference clip.
+
+    Async: returns a job_id immediately. Status is tracked in MongoDB keyed by `avatar_id`
+    (processing -> done processing/failed); on success the R2 link is written to the doc.
+    """
+    job_id = uuid.uuid4().hex[:8]
+
+    image_bytes = await image.read()
+    if not image_bytes:
+        raise HTTPException(400, "empty image upload")
+    image_path = UPLOADS / f"{job_id}_{avatar_id}_{image.filename}"
+    image_path.write_bytes(image_bytes)
+
+    video_path = DEFAULT_VIDEO  # idle-motion always uses the bundled reference clip
+
+    with _JOB_LOCK:
+        JOBS[job_id] = {
+            "status": "pending",
+            "avatar_id": avatar_id,
+            "image": image.filename,
+            "video": video_path.name,
+            "submitted_at": _now(),
+        }
+
+    threading.Thread(target=run_idle_job, args=(job_id, avatar_id, image_path, video_path, None),
+                     daemon=True).start()
     return {"job_id": job_id, **JOBS[job_id]}
 
 
