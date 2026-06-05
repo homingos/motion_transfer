@@ -37,12 +37,16 @@ MODELS_DIR = "/app/models"
 MODELS_VOLUME_NAME = "motion-transfer-models"
 models_volume = modal.Volume.from_name(MODELS_VOLUME_NAME, create_if_missing=True)
 
-# Secrets for the /idle-motion flow (create per-environment before deploying):
-#   modal secret create mongodb-secret MONGODB_URI="mongodb+srv://USER:PASS@dev0.4xtrj.mongodb.net/..." -e dev
-#   modal secret create r2-secret R2_ACCOUNT_ID=... R2_ACCESS_KEY_ID=... R2_SECRET_ACCESS_KEY=... \
-#       R2_BUCKET=... R2_PUBLIC_BASE_URL=https://... -e dev
+# Secrets for the /idle-motion flow. Secret names are PER-ENVIRONMENT:
+#   dev env  (modal deploy ... -e dev): mongodb-secret, r2-secret   <-- current target
+#   main env (default):                 fable-face-secrets, cloudfare-creds
+# Contents required (env-var key names inside the secret must match integrations.py exactly):
+#   mongodb-secret : MONGODB_URI
+#   r2-secret      : R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET_NAME,
+#                    and (optional) R2_PUBLIC_BASE_URL
+# A key-name mismatch (e.g. R2_BUCKET vs R2_BUCKET_NAME) raises KeyError at request time.
 mongodb_secret = modal.Secret.from_name("mongodb-secret")  # MONGODB_URI
-r2_secret = modal.Secret.from_name("r2-secret")            # R2_ACCOUNT_ID/ACCESS_KEY_ID/SECRET_ACCESS_KEY/BUCKET/PUBLIC_BASE_URL
+r2_secret = modal.Secret.from_name("r2-secret")            # R2_ACCOUNT_ID/ACCESS_KEY_ID/SECRET_ACCESS_KEY/BUCKET_NAME/PUBLIC_BASE_URL
 
 
 def build_modal_image(script_dir: Path) -> modal.Image:
@@ -117,7 +121,7 @@ def build_modal_image(script_dir: Path) -> modal.Image:
     # after these), so edits don't trigger a full rebuild. Only what the server
     # needs to run; we do NOT add models/ (the Volume), the local `ltx` venv,
     # outputs/uploads, or the unused CLI/download helpers.
-    for f in ("server.py", "pipeline_runtime.py"):
+    for f in ("server.py", "pipeline_runtime.py", "integrations.py"):
         p = script_dir / f
         if p.exists():
             image = image.add_local_file(str(p.resolve()), f"{APP_DIR}/{f}")

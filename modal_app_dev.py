@@ -24,7 +24,7 @@ import modal
 
 from modal_common import (
     APP_BASENAME, MODELS_DIR,
-    build_modal_image, models_volume,
+    build_modal_image, models_volume, mongodb_secret, r2_secret,
 )
 
 APP_NAME = APP_BASENAME          # same name; isolated by the `dev` environment
@@ -52,6 +52,7 @@ app = modal.App(APP_NAME, image=image)
     max_containers=MAX_CONTAINERS,
     scaledown_window=SCALEDOWN_WINDOW,
     volumes={MODELS_DIR: models_volume},
+    secrets=[mongodb_secret, r2_secret],   # /idle-motion: Mongo status + R2 upload creds
     enable_memory_snapshot=True,   # snapshot CPU RAM so cold starts skip the ~20-min weight read
 )
 @modal.concurrent(max_inputs=MAX_CONCURRENT_INPUTS)
@@ -66,6 +67,25 @@ class MotionTransferInferenceDev:
         import pipeline_runtime
         pipeline_runtime.preload_weights_cpu()
 
+    @modal.enter(snap=False)
+    def _init_cuda_after_restore(self):
+        # Runs AFTER snapshot restore, with the GPU attached, on the container's MAIN thread.
+        # Memory snapshots are CPU-only, so CUDA is uninitialized after restore. If the first
+        # CUDA call instead happens lazily inside a request's daemon thread (run_idle_job runs
+        # in a threading.Thread), the first kernel aborts with SIGABRT
+        # ("terminate called without an active exception"). Initializing CUDA here, then running
+        # one warmup generation (compiles fp8/xformers/triton kernels on the main thread), makes
+        # request threads reuse a ready context — and makes the first real request fast.
+        import torch
+        if torch.cuda.is_available():
+            torch.zeros(1, device="cuda")
+            torch.cuda.synchronize()
+        import pipeline_runtime
+        # The pipeline was built CPU-only during the snapshot phase; repoint it at the GPU,
+        # otherwise generation runs on CPU (GPU idle, hangs at 0/8).
+        pipeline_runtime.bind_pipeline_to_gpu()
+        pipeline_runtime.prewarm_weights()
+
     @modal.asgi_app(label="motion-transfer-dev")
     def fastapi_app(self):
         from server import app as fastapi_app
@@ -77,5 +97,6 @@ def main():
     print("🎬 FLAM — Motion Transfer · DEV")
     print(f"  App:   {APP_NAME}  (deploy into the `dev` environment)")
     print(f"  GPU:   {GPU}  RAM: {MEMORY} MB  scaling: min={MIN_CONTAINERS} max={MAX_CONTAINERS}")
-    print("  URL:   https://ai-team-flam--motion-transfer-dev.modal.run  (label=motion-transfer-dev)")
+    print("  URL:   https://ai-team-flam-dev--motion-transfer-dev.modal.run  (label=motion-transfer-dev)")
+    print("         NOTE: the env ('dev') is part of the workspace slug -> 'ai-team-flam-dev--...'")
     print("  Deploy: modal deploy modal_app_dev.py -e dev")

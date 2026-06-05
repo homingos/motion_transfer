@@ -122,6 +122,36 @@ def warmup() -> None:
         _build_pipeline()
 
 
+def bind_pipeline_to_gpu() -> None:
+    """Repoint the snapshot-built pipeline from CPU to GPU after a memory-snapshot restore.
+
+    The pipeline is constructed during Modal's CPU-only ``@modal.enter(snap=True)`` phase, so
+    ``get_device()`` returned CPU and that was baked into ``pipeline.device``, both ledgers'
+    ``.device``, and ``pipeline_components.device`` — and captured in the snapshot. After restore
+    the GPU exists, but those handles still say CPU, so generation runs on CPU (GPU idle, looks
+    hung at 0/8). Reset every device handle to cuda. Idempotent; no-op without CUDA.
+
+    Note: the text encoder still goes to CPU when LTX_TEXT_ENCODER_CPU=1 — that is decided inside
+    ``ModelLedger.text_encoder()`` by the env var, independent of ``ledger.device``.
+    """
+    import torch
+
+    if not torch.cuda.is_available():
+        return
+    cuda = torch.device("cuda")
+    with _LOCK:
+        pipeline = _build_pipeline()
+        pipeline.device = cuda
+        for name in ("stage_1_model_ledger", "stage_2_model_ledger"):
+            ledger = getattr(pipeline, name, None)
+            if ledger is not None:
+                ledger.device = cuda
+        comps = getattr(pipeline, "pipeline_components", None)
+        if comps is not None and hasattr(comps, "device"):
+            comps.device = cuda
+    logger.info("[runtime] pipeline re-bound to GPU (cuda) after snapshot restore")
+
+
 def prewarm_weights() -> None:
     """Run one throwaway generation on the bundled sample so all model weights are
     loaded into the shared registry up front. After this returns, real requests are
@@ -174,7 +204,7 @@ def preload_weights_cpu() -> None:
             getattr(pipeline, "stage_1_model_ledger", None),
             getattr(pipeline, "stage_2_model_ledger", None),
         ]
-        for ledger in ledgers:
+        for li, ledger in enumerate(ledgers):
             if ledger is None:
                 continue
             saved_device = ledger.device
@@ -184,11 +214,18 @@ def preload_weights_cpu() -> None:
                     accessor = getattr(ledger, name, None)
                     if accessor is None:
                         continue
+                    ts = time.perf_counter()
                     try:
                         model = accessor()  # side effect: registry populated on CPU
                         del model
-                    except ValueError:
-                        pass  # builder not present on this ledger — skip
+                        cached = 0 if _REGISTRY is None else len(_REGISTRY._state_dicts)
+                        logger.info("[snapshot] ledger%d.%s OK in %.1fs (registry=%d)",
+                                    li + 1, name, time.perf_counter() - ts, cached)
+                    except Exception:  # noqa: BLE001 - log the REAL error so the snap phase is diagnosable
+                        # Do NOT swallow silently: a missing builder, CUDA touch, OOM precursor,
+                        # or dtype error here is exactly what we need to see in the Modal logs.
+                        logger.exception("[snapshot] ledger%d.%s FAILED after %.1fs",
+                                         li + 1, name, time.perf_counter() - ts)
             finally:
                 ledger.device = saved_device
     n = 0 if _REGISTRY is None else len(_REGISTRY._state_dicts)

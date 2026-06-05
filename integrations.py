@@ -1,12 +1,17 @@
 """MongoDB status tracking + Cloudflare R2 upload for the /idle-motion endpoint.
 
-Credentials come from environment variables (Modal secrets):
-  MONGODB_URI                          mongodb+srv://<user>:<pass>@dev0.4xtrj.mongodb.net/...
-  R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET, R2_PUBLIC_BASE_URL
+Credentials come from environment variables (Modal secrets — never hardcode):
+  MONGODB_URI
+  R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET_NAME
+  R2_PUBLIC_BASE_URL  (optional — if unset, a presigned URL is used as a fallback)
 
-Mongo target: DB ``Faceshot`` (override MONGODB_DB), collection ``idle_motion``
-(override MONGODB_COLLECTION). Document shape (keyed by avatarid):
-  {avatarid: str, status: "processing" | "done processing" | "failed", link: str, updated_at: str}
+Mongo target: DB ``fableface`` (override MONGODB_DB), collection ``templates``
+(override MONGODB_COLLECTION). Docs are keyed by ObjectId ``_id``. We read:
+  source_assets.image_key:        the R2 key of the subject image to animate (input)
+and update:
+  status:                "processing" | "ready" | "failed"
+  source_assets.idle_vector_key:  the R2 video link (on success; written before status->ready)
+  failure_reason:        the error string (on failure), else None
 
 pymongo/boto3 are imported lazily so importing this module stays cheap and CUDA-free
 (safe for the Modal memory-snapshot path).
@@ -20,15 +25,19 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-MONGO_DB = os.environ.get("MONGODB_DB", "Faceshot")
-MONGO_COLLECTION = os.environ.get("MONGODB_COLLECTION", "idle_motion")
+MONGO_DB = os.environ.get("MONGODB_DB", "fableface")
+MONGO_COLLECTION = os.environ.get("MONGODB_COLLECTION", "templates")
+PRESIGN_EXPIRY_SECONDS = 7 * 24 * 3600  # 7 days (max for SigV4 presigned URLs)
 
 _mongo_lock = threading.Lock()
 _mongo_coll = None
 
+_r2_lock = threading.Lock()
+_r2 = None
 
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 def _collection():
@@ -45,37 +54,158 @@ def _collection():
     return _mongo_coll
 
 
-def set_status(avatar_id: str, status: str, link: str | None = None) -> None:
-    """Upsert the avatar's idle-motion doc with the given status (and link when done).
+def _doc_filter(avatar_id: str) -> dict:
+    """Match the template doc by ObjectId _id (fall back to raw value if not an ObjectId)."""
+    from bson import ObjectId
+    from bson.errors import InvalidId
 
-    Never raises — a DB hiccup must not crash the generation job; it's logged instead.
-    """
-    update = {"avatarid": avatar_id, "status": status, "updated_at": _now()}
-    if link is not None:
-        update["link"] = link
     try:
-        _collection().update_one({"avatarid": avatar_id}, {"$set": update}, upsert=True)
-        logger.info("[mongo] %s -> %s%s", avatar_id, status, f" ({link})" if link else "")
+        return {"_id": ObjectId(avatar_id)}
+    except (InvalidId, TypeError):
+        return {"_id": avatar_id}
+
+
+def set_status(avatar_id: str, status: str, idle_vector_link: str | None = None,
+               failure_reason: str | None = None) -> None:
+    """Update the template doc's status (+ idle_vector_key / failure_reason).
+
+    Best-effort: a DB hiccup is logged, never raised, so it can't crash the job.
+    """
+    fields: dict = {"status": status, "updated_at": _now()}
+    if idle_vector_link is not None:
+        fields["source_assets.idle_vector_key"] = idle_vector_link
+    fields["failure_reason"] = failure_reason  # set on failure, cleared (None) otherwise
+    try:
+        res = _collection().update_one(_doc_filter(avatar_id), {"$set": fields})
+        if res.matched_count == 0:
+            logger.warning("[mongo] no %s.%s doc matched _id=%s", MONGO_DB, MONGO_COLLECTION, avatar_id)
+        else:
+            logger.info("[mongo] %s -> %s%s", avatar_id, status,
+                        f" (idle_vector_key set)" if idle_vector_link else "")
     except Exception as e:  # noqa: BLE001 - status tracking must be best-effort
-        logger.error("[mongo] failed to set status for avatarid=%s: %r", avatar_id, e)
+        logger.error("[mongo] failed to update _id=%s: %r", avatar_id, e)
+
+
+def get_source_image_key(avatar_id: str) -> str | None:
+    """Return ``source_assets.image_key`` (the R2 key of the subject image) for a template.
+
+    Unlike :func:`set_status`, this is **not** best-effort: the image is required to
+    generate, so DB errors propagate and a missing doc/field returns ``None`` for the
+    caller to treat as a hard failure.
+    """
+    doc = _collection().find_one(_doc_filter(avatar_id), {"source_assets.image_key": 1})
+    if not doc:
+        logger.warning("[mongo] no %s.%s doc matched _id=%s (source lookup)", MONGO_DB, MONGO_COLLECTION, avatar_id)
+        return None
+    return (doc.get("source_assets") or {}).get("image_key")
+
+
+def get_template_summary(avatar_id: str) -> dict | None:
+    """Return ``{status, image_key, idle_vector_key}`` for the template, or ``None`` if
+    no doc matches. Used by the dry-run preview to validate the lookup without generating."""
+    doc = _collection().find_one(
+        _doc_filter(avatar_id),
+        {"status": 1, "source_assets.image_key": 1, "source_assets.idle_vector_key": 1},
+    )
+    if not doc:
+        return None
+    sa = doc.get("source_assets") or {}
+    return {
+        "status": doc.get("status"),
+        "image_key": sa.get("image_key"),
+        "idle_vector_key": sa.get("idle_vector_key"),
+    }
+
+
+def set_idle_vector_key(avatar_id: str, video_key: str) -> None:
+    """Write only the R2 video **key** to ``source_assets.idle_vector_key``, without
+    touching ``status``.
+
+    Stores a bucket key (e.g. ``templates/<id>/idle.mp4``) to mirror how the input
+    ``source_assets.image_key`` is stored — not a presigned/public URL. Called before
+    flipping status to ``ready`` so any consumer that observes ``status: "ready"`` is
+    guaranteed to also see ``idle_vector_key``. Best-effort.
+    """
+    try:
+        res = _collection().update_one(
+            _doc_filter(avatar_id),
+            {"$set": {"source_assets.idle_vector_key": video_key, "updated_at": _now()}},
+        )
+        if res.matched_count == 0:
+            logger.warning("[mongo] no %s.%s doc matched _id=%s (link write)", MONGO_DB, MONGO_COLLECTION, avatar_id)
+        else:
+            logger.info("[mongo] %s idle_vector_key set", avatar_id)
+    except Exception as e:  # noqa: BLE001 - link write is best-effort
+        logger.error("[mongo] failed to set link _id=%s: %r", avatar_id, e)
+
+
+def _r2_client():
+    """Cached boto3 S3 client pointed at the R2 endpoint (shared HTTP pool).
+
+    Uses path-style addressing + SigV4 (the team convention): path-style avoids
+    bucket-name DNS issues and yields correct presigned URLs against R2.
+    """
+    global _r2
+    if _r2 is None:
+        with _r2_lock:
+            if _r2 is None:
+                import boto3
+                from botocore.config import Config
+
+                account = os.environ["R2_ACCOUNT_ID"]
+                _r2 = boto3.client(
+                    "s3",
+                    endpoint_url=f"https://{account}.r2.cloudflarestorage.com",
+                    aws_access_key_id=os.environ["R2_ACCESS_KEY_ID"],
+                    aws_secret_access_key=os.environ["R2_SECRET_ACCESS_KEY"],
+                    region_name="auto",
+                    config=Config(signature_version="s3v4", s3={"addressing_style": "path"}),
+                )
+    return _r2
 
 
 def r2_upload(local_path: str | Path, key: str, content_type: str = "video/mp4") -> str:
-    """Upload a local file to the R2 bucket under ``key`` and return its public URL."""
-    import boto3
+    """Upload a file to the R2 bucket under ``key`` and return a link to it.
 
-    account = os.environ["R2_ACCOUNT_ID"]
-    bucket = os.environ["R2_BUCKET"]
-    public_base = os.environ["R2_PUBLIC_BASE_URL"].rstrip("/")
-
-    client = boto3.client(
-        "s3",
-        endpoint_url=f"https://{account}.r2.cloudflarestorage.com",
-        aws_access_key_id=os.environ["R2_ACCESS_KEY_ID"],
-        aws_secret_access_key=os.environ["R2_SECRET_ACCESS_KEY"],
-        region_name="auto",
-    )
+    Uses R2_PUBLIC_BASE_URL when set (permanent public URL); otherwise returns a
+    presigned URL valid for 7 days (works without public bucket access, but expires).
+    """
+    bucket = os.environ["R2_BUCKET_NAME"]
+    client = _r2_client()
     client.upload_file(str(local_path), bucket, key, ExtraArgs={"ContentType": content_type})
-    url = f"{public_base}/{key}"
-    logger.info("[r2] uploaded %s -> %s", key, url)
+
+    base = os.environ.get("R2_PUBLIC_BASE_URL", "").rstrip("/")
+    if base:
+        url = f"{base}/{key}"
+    else:
+        url = client.generate_presigned_url(
+            "get_object", Params={"Bucket": bucket, "Key": key}, ExpiresIn=PRESIGN_EXPIRY_SECONDS
+        )
+        logger.warning("[r2] R2_PUBLIC_BASE_URL unset — returning a 7-day presigned URL for %s", key)
+    logger.info("[r2] uploaded %s", key)
     return url
+
+
+def r2_download(key: str, local_path: str | Path) -> str:
+    """Download the R2 object at ``key`` to ``local_path`` and return the local path."""
+    bucket = os.environ["R2_BUCKET_NAME"]
+    client = _r2_client()
+    Path(local_path).parent.mkdir(parents=True, exist_ok=True)
+    client.download_file(bucket, key, str(local_path))
+    logger.info("[r2] downloaded %s", key)
+    return str(local_path)
+
+
+def r2_object_exists(key: str) -> bool:
+    """Return True if an object exists at ``key`` in the R2 bucket (HEAD, no download)."""
+    from botocore.exceptions import ClientError
+
+    bucket = os.environ["R2_BUCKET_NAME"]
+    client = _r2_client()
+    try:
+        client.head_object(Bucket=bucket, Key=key)
+        return True
+    except ClientError as e:
+        if e.response.get("Error", {}).get("Code") in ("404", "NoSuchKey", "NotFound"):
+            return False
+        raise

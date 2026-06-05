@@ -93,16 +93,34 @@ def run_job(job_id: str, image_path: Path, video_path: Path, prompt: str | None)
             _set(job_id, status="failed", finished_at=_now(), error=repr(e))
 
 
-def run_idle_job(job_id: str, avatar_id: str, image_path: Path, video_path: Path, prompt: str | None) -> None:
-    """Generate the idle-motion video for an avatar, tracking status in MongoDB and
-    uploading the result to R2.
+def run_idle_job(job_id: str, avatar_id: str, video_path: Path, prompt: str | None) -> None:
+    """Generate the idle-motion video for an avatar from its avatar_id alone.
 
-    DB lifecycle on the `Faceshot.idle_motion` doc keyed by `avatarid`:
-      processing  ->  done processing (+ link)   on success
-      processing  ->  failed                     on any error / no output
+    The subject image is resolved from the `fableface.templates` doc (keyed by ObjectId
+    `_id` = avatar_id): we read `source_assets.image_key` and download that object from R2.
+
+    DB lifecycle on that doc:
+      status: processing                                             on start
+      source_assets.idle_vector_key = R2 link, then status: ready    on success (link first)
+      status: failed (+ failure_reason)                              on error
     """
-    _set(job_id, status="waiting_for_gpu", avatar_id=avatar_id)
+    _set(job_id, status="fetching_source", avatar_id=avatar_id)
     integrations.set_status(avatar_id, "processing")
+
+    # Resolve + download the subject image from R2 using the doc's source_assets.image_key.
+    try:
+        image_key = integrations.get_source_image_key(avatar_id)
+        if not image_key:
+            raise RuntimeError(f"no source_assets.image_key on templates doc _id={avatar_id}")
+        image_ext = Path(image_key).suffix or ".png"
+        image_path = UPLOADS / f"{job_id}_{avatar_id}_source{image_ext}"
+        integrations.r2_download(image_key, image_path)
+    except Exception as e:
+        _set(job_id, status="failed", finished_at=_now(), error=repr(e))
+        integrations.set_status(avatar_id, "failed", failure_reason=repr(e))
+        return
+
+    _set(job_id, status="waiting_for_gpu")
     with _GPU_LOCK:
         _set(job_id, status="running", started_at=_now())
         output_path = OUTPUTS / f"idle_{avatar_id}_{job_id}.mp4"
@@ -115,13 +133,17 @@ def run_idle_job(job_id: str, avatar_id: str, image_path: Path, video_path: Path
             )
             if not output_path.exists():
                 raise RuntimeError("generation finished but no output file was produced")
-            link = integrations.r2_upload(output_path, key=f"idle_motion/{avatar_id}.mp4")
+            video_key = f"templates/{avatar_id}/idle.mp4"
+            link = integrations.r2_upload(output_path, key=video_key)
+            # Write the video KEY first, THEN flip status to ready, so a consumer that
+            # sees status="ready" is guaranteed to also see source_assets.idle_vector_key.
+            integrations.set_idle_vector_key(avatar_id, video_key)
+            integrations.set_status(avatar_id, "ready")
             _set(job_id, status="done", finished_at=_now(),
-                 result=str(output_path.relative_to(ROOT)), link=link)
-            integrations.set_status(avatar_id, "done processing", link=link)
+                 result=str(output_path.relative_to(ROOT)), video_key=video_key, link=link)
         except Exception as e:
             _set(job_id, status="failed", finished_at=_now(), error=repr(e))
-            integrations.set_status(avatar_id, "failed")
+            integrations.set_status(avatar_id, "failed", failure_reason=repr(e))
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -170,36 +192,73 @@ async def generate(
 
 @app.post("/idle-motion")
 async def idle_motion(
-    image: UploadFile = File(..., description="Subject image (PNG or JPG)"),
-    avatar_id: str = Form(..., description="Avatar id — the key written to Faceshot.idle_motion"),
+    avatar_id: str = Form(..., description="Avatar id — ObjectId _id of the fableface.templates doc. "
+                                          "The subject image is read from its source_assets.image_key (R2)."),
 ):
-    """Generate an idle-motion video for an avatar using the default reference clip.
+    """Generate an idle-motion video for an avatar from its avatar_id alone.
 
-    Async: returns a job_id immediately. Status is tracked in MongoDB keyed by `avatar_id`
-    (processing -> done processing/failed); on success the R2 link is written to the doc.
+    Async: returns a job_id immediately. The subject image is fetched from R2 using the
+    template doc's source_assets.image_key; generation uses the bundled reference clip.
+    Status is tracked in MongoDB keyed by avatar_id (processing -> ready/failed); on
+    success the R2 link is written to source_assets.idle_vector_key before status flips
+    to ready.
     """
+    avatar_id = avatar_id.strip()
+    if not avatar_id:
+        raise HTTPException(400, "avatar_id is required")
+
     job_id = uuid.uuid4().hex[:8]
-
-    image_bytes = await image.read()
-    if not image_bytes:
-        raise HTTPException(400, "empty image upload")
-    image_path = UPLOADS / f"{job_id}_{avatar_id}_{image.filename}"
-    image_path.write_bytes(image_bytes)
-
     video_path = DEFAULT_VIDEO  # idle-motion always uses the bundled reference clip
 
     with _JOB_LOCK:
         JOBS[job_id] = {
             "status": "pending",
             "avatar_id": avatar_id,
-            "image": image.filename,
             "video": video_path.name,
             "submitted_at": _now(),
         }
 
-    threading.Thread(target=run_idle_job, args=(job_id, avatar_id, image_path, video_path, None),
+    threading.Thread(target=run_idle_job, args=(job_id, avatar_id, video_path, None),
                      daemon=True).start()
     return {"job_id": job_id, **JOBS[job_id]}
+
+
+@app.get("/idle-motion/{avatar_id}/preview")
+def idle_motion_preview(avatar_id: str):
+    """Dry run: resolve the avatar's source image and confirm it exists in R2 — no GPU.
+
+    Validates the same lookup /idle-motion would do (read source_assets.image_key, then
+    HEAD it in R2) without generating, so you can check an avatar_id before spending a run.
+    Returns ``ok: true`` only when the source object is present and fetchable.
+    """
+    avatar_id = avatar_id.strip()
+    if not avatar_id:
+        raise HTTPException(400, "avatar_id is required")
+
+    try:
+        summary = integrations.get_template_summary(avatar_id)
+    except Exception as e:
+        raise HTTPException(502, f"mongo lookup failed: {e!r}")
+    if summary is None:
+        raise HTTPException(404, f"no fableface.templates doc with _id={avatar_id}")
+
+    image_key = summary.get("image_key")
+    if not image_key:
+        return {"avatar_id": avatar_id, "ok": False,
+                "reason": "doc has no source_assets.image_key", **summary}
+
+    try:
+        exists = integrations.r2_object_exists(image_key)
+    except Exception as e:
+        raise HTTPException(502, f"r2 head_object failed for {image_key!r}: {e!r}")
+
+    return {
+        "avatar_id": avatar_id,
+        "ok": exists,
+        "reason": None if exists else f"image_key not found in R2: {image_key}",
+        "would_write_video_key": f"templates/{avatar_id}/idle.mp4",
+        **summary,
+    }
 
 
 @app.get("/jobs/{job_id}")

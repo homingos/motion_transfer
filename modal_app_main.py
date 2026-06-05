@@ -21,7 +21,7 @@ import modal
 
 from modal_common import (
     APP_BASENAME, MODELS_DIR,
-    build_modal_image, models_volume,
+    build_modal_image, models_volume, mongodb_secret, r2_secret,
 )
 
 # =============================================================================
@@ -64,16 +64,46 @@ app = modal.App(APP_NAME, image=image)
     max_containers=MAX_CONTAINERS,
     scaledown_window=SCALEDOWN_WINDOW,
     volumes={MODELS_DIR: models_volume},
+    secrets=[mongodb_secret, r2_secret],   # /idle-motion: Mongo status + R2 read/upload creds
+    enable_memory_snapshot=True,   # snapshot CPU RAM so cold starts skip the ~18-min weight read
 )
 @modal.concurrent(max_inputs=MAX_CONCURRENT_INPUTS)
 class MotionTransferInference:
     """FLAM Motion Transfer — Production."""
 
+    @modal.enter(snap=True)
+    def _load_weights_to_cpu(self):
+        # Runs during snapshotting (CPU only, no GPU). Loads ~67 GB of weights from the
+        # volume into the in-RAM registry; the snapshot captures it, so future cold starts
+        # restore from the snapshot instead of re-reading/re-parsing from disk. This turns
+        # the first request from a ~20-min cold load into the warm path (~40s).
+        import pipeline_runtime
+        pipeline_runtime.preload_weights_cpu()
+
+    @modal.enter(snap=False)
+    def _init_cuda_after_restore(self):
+        # Runs AFTER snapshot restore, with the GPU attached, on the container's MAIN thread.
+        # Memory snapshots are CPU-only, so CUDA is uninitialized after restore. If the first
+        # CUDA call instead happens lazily inside a request's daemon thread (run_idle_job runs
+        # in a threading.Thread), the first kernel aborts with SIGABRT
+        # ("terminate called without an active exception"). Initializing CUDA here, then running
+        # one warmup generation (compiles fp8/xformers/triton kernels on the main thread), makes
+        # request threads reuse a ready context — and makes the first real request fast.
+        import torch
+        if torch.cuda.is_available():
+            torch.zeros(1, device="cuda")
+            torch.cuda.synchronize()
+        import pipeline_runtime
+        # The pipeline was built CPU-only during the snapshot phase; repoint it at the GPU,
+        # otherwise generation runs on CPU (GPU idle, hangs at 0/8).
+        pipeline_runtime.bind_pipeline_to_gpu()
+        pipeline_runtime.prewarm_weights()
+
     @modal.asgi_app()
     def fastapi_app(self):
-        # server.py's lifespan builds the pipeline and (WARMUP_ON_STARTUP=1, set
-        # in the image) warms the weights in a background thread, so the port
-        # binds immediately and the first real request is already warm.
+        # server.py's lifespan builds the pipeline object (cheap). Weights are already
+        # resident in CPU RAM from the restored memory snapshot, so the first real
+        # request hits the warm path instead of paying the cold disk read.
         from server import app as fastapi_app
         return fastapi_app
 
