@@ -100,9 +100,10 @@ def run_idle_job(job_id: str, avatar_id: str, video_path: Path, prompt: str | No
     `_id` = avatar_id): we read `source_assets.image_key` and download that object from R2.
 
     DB lifecycle on that doc:
-      status: processing                                             on start
-      source_assets.idle_vector_key = R2 link, then status: ready    on success (link first)
-      status: failed (+ failure_reason)                              on error
+      status: processing                                                  on start
+      source_assets.idle_animation_key = R2 key, then status: ready       on success (key first)
+      status: failed (+ failure_reason)                                   on error
+    (idle_vector_key is a separate field and is left untouched.)
     """
     _set(job_id, status="fetching_source", avatar_id=avatar_id)
     integrations.set_status(avatar_id, "processing")
@@ -133,14 +134,15 @@ def run_idle_job(job_id: str, avatar_id: str, video_path: Path, prompt: str | No
             )
             if not output_path.exists():
                 raise RuntimeError("generation finished but no output file was produced")
-            video_key = f"templates/{avatar_id}/idle.mp4"
-            link = integrations.r2_upload(output_path, key=video_key)
-            # Write the video KEY first, THEN flip status to ready, so a consumer that
-            # sees status="ready" is guaranteed to also see source_assets.idle_vector_key.
-            integrations.set_idle_vector_key(avatar_id, video_key)
+            # Match the doc's key convention (no extension), e.g. "templates/<id>/idle".
+            animation_key = f"templates/{avatar_id}/idle"
+            link = integrations.r2_upload(output_path, key=animation_key)
+            # Write the animation KEY first, THEN flip status to ready, so a consumer that
+            # sees status="ready" is guaranteed to also see source_assets.idle_animation_key.
+            integrations.set_idle_animation_key(avatar_id, animation_key)
             integrations.set_status(avatar_id, "ready")
             _set(job_id, status="done", finished_at=_now(),
-                 result=str(output_path.relative_to(ROOT)), video_key=video_key, link=link)
+                 result=str(output_path.relative_to(ROOT)), animation_key=animation_key, link=link)
         except Exception as e:
             _set(job_id, status="failed", finished_at=_now(), error=repr(e))
             integrations.set_status(avatar_id, "failed", failure_reason=repr(e))
@@ -200,8 +202,8 @@ async def idle_motion(
     Async: returns a job_id immediately. The subject image is fetched from R2 using the
     template doc's source_assets.image_key; generation uses the bundled reference clip.
     Status is tracked in MongoDB keyed by avatar_id (processing -> ready/failed); on
-    success the R2 link is written to source_assets.idle_vector_key before status flips
-    to ready.
+    success the generated idle video is uploaded to R2 and its key is written to
+    source_assets.idle_animation_key before status flips to ready.
     """
     avatar_id = avatar_id.strip()
     if not avatar_id:
@@ -256,7 +258,7 @@ def idle_motion_preview(avatar_id: str):
         "avatar_id": avatar_id,
         "ok": exists,
         "reason": None if exists else f"image_key not found in R2: {image_key}",
-        "would_write_video_key": f"templates/{avatar_id}/idle.mp4",
+        "would_write_animation_key": f"templates/{avatar_id}/idle",
         **summary,
     }
 

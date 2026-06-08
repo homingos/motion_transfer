@@ -10,8 +10,10 @@ Mongo target: DB ``fableface`` (override MONGODB_DB), collection ``templates``
   source_assets.image_key:        the R2 key of the subject image to animate (input)
 and update:
   status:                "processing" | "ready" | "failed"
-  source_assets.idle_vector_key:  the R2 video link (on success; written before status->ready)
+  source_assets.idle_animation_key:  the R2 key of the generated idle video
+                                     (on success; written before status->ready)
   failure_reason:        the error string (on failure), else None
+(idle_vector_key is a separate field and is left untouched.)
 
 pymongo/boto3 are imported lazily so importing this module stays cheap and CUDA-free
 (safe for the Modal memory-snapshot path).
@@ -101,11 +103,11 @@ def get_source_image_key(avatar_id: str) -> str | None:
 
 
 def get_template_summary(avatar_id: str) -> dict | None:
-    """Return ``{status, image_key, idle_vector_key}`` for the template, or ``None`` if
+    """Return ``{status, image_key, idle_animation_key}`` for the template, or ``None`` if
     no doc matches. Used by the dry-run preview to validate the lookup without generating."""
     doc = _collection().find_one(
         _doc_filter(avatar_id),
-        {"status": 1, "source_assets.image_key": 1, "source_assets.idle_vector_key": 1},
+        {"status": 1, "source_assets.image_key": 1, "source_assets.idle_animation_key": 1},
     )
     if not doc:
         return None
@@ -113,30 +115,32 @@ def get_template_summary(avatar_id: str) -> dict | None:
     return {
         "status": doc.get("status"),
         "image_key": sa.get("image_key"),
-        "idle_vector_key": sa.get("idle_vector_key"),
+        "idle_animation_key": sa.get("idle_animation_key"),
     }
 
 
-def set_idle_vector_key(avatar_id: str, video_key: str) -> None:
-    """Write only the R2 video **key** to ``source_assets.idle_vector_key``, without
-    touching ``status``.
+def set_idle_animation_key(avatar_id: str, animation_key: str) -> None:
+    """Write only the R2 idle-animation **key** to ``source_assets.idle_animation_key``,
+    without touching ``status``.
 
-    Stores a bucket key (e.g. ``templates/<id>/idle.mp4``) to mirror how the input
+    Stores a bucket key (e.g. ``templates/<id>/idle``) to mirror how the input
     ``source_assets.image_key`` is stored — not a presigned/public URL. Called before
     flipping status to ``ready`` so any consumer that observes ``status: "ready"`` is
-    guaranteed to also see ``idle_vector_key``. Best-effort.
+    guaranteed to also see ``idle_animation_key``. Leaves ``idle_vector_key`` untouched.
+    Best-effort.
     """
     try:
         res = _collection().update_one(
             _doc_filter(avatar_id),
-            {"$set": {"source_assets.idle_vector_key": video_key, "updated_at": _now()}},
+            {"$set": {"source_assets.idle_animation_key": animation_key, "updated_at": _now()}},
         )
         if res.matched_count == 0:
-            logger.warning("[mongo] no %s.%s doc matched _id=%s (link write)", MONGO_DB, MONGO_COLLECTION, avatar_id)
+            logger.warning("[mongo] no %s.%s doc matched _id=%s (animation-key write)",
+                           MONGO_DB, MONGO_COLLECTION, avatar_id)
         else:
-            logger.info("[mongo] %s idle_vector_key set", avatar_id)
-    except Exception as e:  # noqa: BLE001 - link write is best-effort
-        logger.error("[mongo] failed to set link _id=%s: %r", avatar_id, e)
+            logger.info("[mongo] %s idle_animation_key set", avatar_id)
+    except Exception as e:  # noqa: BLE001 - key write is best-effort
+        logger.error("[mongo] failed to set idle_animation_key _id=%s: %r", avatar_id, e)
 
 
 def _r2_client():
