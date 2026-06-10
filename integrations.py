@@ -213,3 +213,48 @@ def r2_object_exists(key: str) -> bool:
         if e.response.get("Error", {}).get("Code") in ("404", "NoSuchKey", "NotFound"):
             return False
         raise
+
+
+def _jobs_collection():
+    """Lazily get the motion_transfer_jobs collection from the same DB."""
+    from pymongo import MongoClient
+    uri = os.environ["MONGODB_URI"]
+    client = MongoClient(uri, serverSelectionTimeoutMS=10000, tz_aware=True)
+    return client[MONGO_DB]["motion_transfer_jobs"]
+
+
+def create_job(request_id: str, endpoint: str, **job_data) -> dict:
+    """Create a job record in MongoDB. Returns the created document."""
+    doc = {
+        "request_id": request_id,
+        "endpoint": endpoint,  # "generate" or "idle-motion"
+        "status": "pending",
+        "created_at": _now(),
+        "updated_at": _now(),
+        **job_data
+    }
+    result = _jobs_collection().insert_one(doc)
+    logger.info("[jobs] created request_id=%s (endpoint=%s)", request_id, endpoint)
+    return {**doc, "_id": result.inserted_id}
+
+
+def update_job(request_id: str, **fields) -> None:
+    """Update job status and other fields."""
+    try:
+        fields["updated_at"] = _now()
+        _jobs_collection().update_one(
+            {"request_id": request_id},
+            {"$set": fields}
+        )
+        logger.info("[jobs] updated request_id=%s: %s", request_id, fields)
+    except Exception as e:
+        logger.error("[jobs] failed to update request_id=%s: %r", request_id, e)
+
+
+def get_job(request_id: str) -> dict | None:
+    """Retrieve a job record by request_id."""
+    try:
+        return _jobs_collection().find_one({"request_id": request_id})
+    except Exception as e:
+        logger.error("[jobs] failed to get request_id=%s: %r", request_id, e)
+        return None

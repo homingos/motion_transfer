@@ -54,3 +54,5 @@ ltx
 
 # Exceptions: ship the default reference video that main.py uses
 !assets/idle_avatar_15_reverse.mp4
+r2_check
+uploads
