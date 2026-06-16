@@ -9,6 +9,7 @@ UI:  open http://localhost:8000/ in a browser.
 API: POST /generate (multipart), then GET /jobs/{id} to poll, then GET /jobs/{id}/result for the mp4.
 """
 
+import logging
 import os
 import threading
 import uuid
@@ -17,12 +18,14 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 import pipeline_runtime
 import integrations
+
+logger = logging.getLogger(__name__)
 
 ROOT = Path(__file__).resolve().parent
 UPLOADS = ROOT / "uploads"
@@ -32,6 +35,17 @@ DEFAULT_VIDEO = ROOT / "assets" / "idle_avatar_15_reverse.mp4"
 
 UPLOADS.mkdir(parents=True, exist_ok=True)
 OUTPUTS.mkdir(parents=True, exist_ok=True)
+
+# Environment-specific API mode: "full" (both image + avatar_id) or "r2_only" (avatar_id only)
+API_MODE = os.environ.get("API_MODE", "full")
+
+
+def _public_api_key_guard(request: Request) -> None:
+    """Check PUBLIC_API_KEY header if PUBLIC_API_KEY env var is set."""
+    key = os.environ.get("PUBLIC_API_KEY")
+    if key and request.headers.get("X-API-Key") != key:
+        raise HTTPException(401, "invalid or missing X-API-Key")
+
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -49,6 +63,9 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(title="LTX-2 Motion Transfer", lifespan=_lifespan)
 
+# In-memory job registry for this server instance.
+JOBS: dict[str, dict] = {}
+_JOB_LOCK = threading.Lock()
 # Serialize generations: the pipeline pins the whole GPU, so we run one at a time.
 _GPU_LOCK = threading.Lock()
 
@@ -58,10 +75,13 @@ def _now() -> str:
 
 
 def _update_job(request_id: str, **fields) -> None:
-    integrations.update_job(request_id, **fields)
+    with _JOB_LOCK:
+        if request_id in JOBS:
+            JOBS[request_id].update(fields)
 
 
-def run_job(request_id: str, image_path: Path, video_path: Path, prompt: str | None) -> None:
+def run_job(request_id: str, image_path: Path, video_path: Path, prompt: str | None,
+            lora_strength: float | None = None, video_strength: float | None = None) -> None:
     """Run the warm in-process pipeline and capture status.
 
     The pipeline keeps its weights resident in CPU RAM (shared StateDictRegistry),
@@ -73,12 +93,17 @@ def run_job(request_id: str, image_path: Path, video_path: Path, prompt: str | N
         _update_job(request_id, status="running", started_at=_now())
         output_path = OUTPUTS / f"api_{request_id}.mp4"
         try:
-            pipeline_runtime.generate(
-                image_path=str(image_path),
-                output_path=str(output_path),
-                video_path=str(video_path),
-                prompt=prompt or None,
-            )
+            kwargs = {
+                "image_path": str(image_path),
+                "output_path": str(output_path),
+                "video_path": str(video_path),
+                "prompt": prompt or None,
+            }
+            if lora_strength is not None:
+                kwargs["lora_strength"] = lora_strength
+            if video_strength is not None:
+                kwargs["video_strength"] = video_strength
+            pipeline_runtime.generate(**kwargs)
             if output_path.exists():
                 _update_job(request_id, status="done", finished_at=_now(),
                      result=str(output_path.relative_to(ROOT)))
@@ -89,7 +114,8 @@ def run_job(request_id: str, image_path: Path, video_path: Path, prompt: str | N
             _update_job(request_id, status="failed", finished_at=_now(), error=repr(e))
 
 
-def run_idle_job(request_id: str, avatar_id: str, video_path: Path, prompt: str | None) -> None:
+def run_idle_job(request_id: str, avatar_id: str, video_path: Path, prompt: str | None,
+                 lora_strength: float | None = None, video_strength: float | None = None) -> None:
     """Generate the idle-motion video for an avatar from its avatar_id alone.
 
     The subject image is resolved from the `fableface.templates` doc (keyed by ObjectId
@@ -122,12 +148,17 @@ def run_idle_job(request_id: str, avatar_id: str, video_path: Path, prompt: str 
         _update_job(request_id, status="running", started_at=_now())
         output_path = OUTPUTS / f"idle_{avatar_id}_{request_id}.mp4"
         try:
-            pipeline_runtime.generate(
-                image_path=str(image_path),
-                output_path=str(output_path),
-                video_path=str(video_path),
-                prompt=prompt or None,
-            )
+            kwargs = {
+                "image_path": str(image_path),
+                "output_path": str(output_path),
+                "video_path": str(video_path),
+                "prompt": prompt or None,
+            }
+            if lora_strength is not None:
+                kwargs["lora_strength"] = lora_strength
+            if video_strength is not None:
+                kwargs["video_strength"] = video_strength
+            pipeline_runtime.generate(**kwargs)
             if not output_path.exists():
                 raise RuntimeError("generation finished but no output file was produced")
             # Match the doc's key convention (no extension), e.g. "templates/<id>/idle".
@@ -154,6 +185,8 @@ async def generate(
     image: UploadFile = File(..., description="Subject image (PNG or JPG)"),
     video: UploadFile | None = File(None, description="Reference motion video (optional; defaults to assets/idle_avatar_15_reverse.mp4)"),
     prompt: str | None = Form(None, description="Text prompt (optional; main.py has a sensible default)"),
+    lora_strength: float | None = Form(None, description="LoRA strength (optional, 0.0-1.0; default 0.8)"),
+    video_strength: float | None = Form(None, description="Video conditioning strength (optional, 0.0-1.0; default 0.85)"),
 ):
     request_id = uuid.uuid4().hex[:12]
 
@@ -174,27 +207,26 @@ async def generate(
         video_path = DEFAULT_VIDEO
         used_default = True
 
-    job_data = {
-        "image": image.filename,
-        "video": video_path.name,
-        "used_default_video": used_default,
-        "prompt": prompt,
-    }
-    integrations.create_job(request_id, "generate", **job_data)
+    with _JOB_LOCK:
+        JOBS[request_id] = {
+            "status": "pending",
+            "image": image.filename,
+            "video": video_path.name,
+            "used_default_video": used_default,
+            "prompt": prompt,
+            "submitted_at": _now(),
+        }
 
-    threading.Thread(target=run_job, args=(request_id, image_path, video_path, prompt), daemon=True).start()
-    return {
-        "request_id": request_id,
-        "status": "pending",
-        "submitted_at": _now(),
-        **job_data
-    }
+    threading.Thread(target=run_job, args=(request_id, image_path, video_path, prompt, lora_strength, video_strength), daemon=True).start()
+    return {"request_id": request_id, **JOBS[request_id]}
 
 
 @app.post("/idle-motion")
 async def idle_motion(
     avatar_id: str = Form(..., description="Avatar id — ObjectId _id of the fableface.templates doc. "
                                           "The subject image is read from its source_assets.image_key (R2)."),
+    lora_strength: float | None = Form(None, description="LoRA strength (optional, 0.0-1.0; default 0.8)"),
+    video_strength: float | None = Form(None, description="Video conditioning strength (optional, 0.0-1.0; default 0.85)"),
 ):
     """Generate an idle-motion video for an avatar from its avatar_id alone.
 
@@ -211,20 +243,82 @@ async def idle_motion(
     request_id = uuid.uuid4().hex[:12]
     video_path = DEFAULT_VIDEO  # idle-motion always uses the bundled reference clip
 
-    job_data = {
-        "avatar_id": avatar_id,
-        "video": video_path.name,
-    }
-    integrations.create_job(request_id, "idle-motion", **job_data)
+    with _JOB_LOCK:
+        JOBS[request_id] = {
+            "status": "pending",
+            "avatar_id": avatar_id,
+            "video": video_path.name,
+            "submitted_at": _now(),
+        }
 
-    threading.Thread(target=run_idle_job, args=(request_id, avatar_id, video_path, None),
+    threading.Thread(target=run_idle_job, args=(request_id, avatar_id, video_path, None, lora_strength, video_strength),
                      daemon=True).start()
+    return {"request_id": request_id, **JOBS[request_id]}
+
+
+@app.get("/avatar/{avatar_id}/info")
+def avatar_info(avatar_id: str):
+    """Get avatar metadata: status, image_key, idle_animation_key, and R2 status.
+
+    Returns the template doc's status and asset keys without generating, confirming
+    what exists in MongoDB and R2.
+    """
+    avatar_id = avatar_id.strip()
+    if not avatar_id:
+        raise HTTPException(400, "avatar_id is required")
+
+    try:
+        summary = integrations.get_template_summary(avatar_id)
+    except Exception as e:
+        raise HTTPException(502, f"mongo lookup failed: {e!r}")
+    if summary is None:
+        raise HTTPException(404, f"no fableface.templates doc with _id={avatar_id}")
+
+    image_key = summary.get("image_key")
+    idle_animation_key = summary.get("idle_animation_key")
+
+    image_exists = False
+    animation_exists = False
+
+    if image_key:
+        try:
+            image_exists = integrations.r2_object_exists(image_key)
+        except Exception as e:
+            raise HTTPException(502, f"r2 head_object failed for {image_key!r}: {e!r}")
+
+    if idle_animation_key:
+        try:
+            animation_exists = integrations.r2_object_exists(idle_animation_key)
+        except Exception as e:
+            logger.warning("failed to check animation key in R2: %r", e)
+
     return {
-        "request_id": request_id,
-        "status": "pending",
-        "submitted_at": _now(),
-        **job_data
+        "avatar_id": avatar_id,
+        "status": summary.get("status"),
+        "image_key": image_key,
+        "image_exists_in_r2": image_exists,
+        "idle_animation_key": idle_animation_key,
+        "idle_animation_exists_in_r2": animation_exists,
     }
+
+
+@app.post("/avatar/{avatar_id}/status")
+def update_avatar_status(avatar_id: str, status: str, failure_reason: str | None = Form(None)):
+    """Update avatar status (and optionally failure_reason).
+
+    Valid status values: "processing", "ready", "failed".
+    """
+    avatar_id = avatar_id.strip()
+    if not avatar_id:
+        raise HTTPException(400, "avatar_id is required")
+    if status not in ("processing", "ready", "failed"):
+        raise HTTPException(400, "status must be one of: processing, ready, failed")
+
+    try:
+        integrations.set_status(avatar_id, status, failure_reason=failure_reason)
+        return {"avatar_id": avatar_id, "status": status, "updated": True}
+    except Exception as e:
+        raise HTTPException(502, f"failed to update status: {e!r}")
 
 
 @app.get("/idle-motion/{avatar_id}/preview")
@@ -265,24 +359,118 @@ def idle_motion_preview(avatar_id: str):
     }
 
 
+@app.post("/animate")
+async def animate(
+    image: UploadFile | None = File(None, description="Subject image (PNG or JPG). If provided, returns MP4 directly."),
+    avatar_id: str | None = Form(None, description="Avatar id (ObjectId). If provided, returns request_id for async polling (R2 lookup required)."),
+    prompt: str | None = Form(None, description="Text prompt (optional)"),
+    lora_strength: float | None = Form(None, description="LoRA strength (optional, 0.0-1.0; default 0.8)"),
+    video_strength: float | None = Form(None, description="Video conditioning strength (optional, 0.0-1.0; default 0.85)"),
+    _: None = Depends(_public_api_key_guard),
+):
+    """Unified endpoint: image → MP4 directly; avatar_id → request_id for polling.
+
+    Auth: X-API-Key header (only required if PUBLIC_API_KEY env var is set).
+
+    **Image mode (synchronous):**
+      Supply `image` file → generates and returns MP4 directly.
+      Takes 2-5 minutes, returns binary MP4 file.
+
+    **Avatar ID mode (asynchronous):**
+      Supply `avatar_id` → returns request_id immediately.
+      System fetches image from R2, generates, and uploads result.
+      Poll via GET /jobs/{request_id}, download via GET /jobs/{request_id}/result.
+    """
+    if not image and not avatar_id:
+        raise HTTPException(400, "either 'image' or 'avatar_id' is required")
+    if image and avatar_id:
+        raise HTTPException(400, "provide only one of 'image' or 'avatar_id'")
+
+    # Environment-specific API mode check: dev only allows avatar_id
+    if API_MODE == "r2_only" and image:
+        raise HTTPException(400, "image upload not allowed in this environment; provide avatar_id instead")
+
+    # ============= IMAGE MODE (SYNCHRONOUS) =============
+    if image:
+        request_id = uuid.uuid4().hex[:12]
+
+        image_bytes = await image.read()
+        if not image_bytes:
+            raise HTTPException(400, "empty image upload")
+        image_path = UPLOADS / f"{request_id}_image_{image.filename}"
+        image_path.write_bytes(image_bytes)
+
+        video_path = DEFAULT_VIDEO
+        output_path = OUTPUTS / f"sync_{request_id}.mp4"
+
+        # Run synchronously (blocking) and return the MP4 file directly
+        try:
+            kwargs = {
+                "image_path": str(image_path),
+                "output_path": str(output_path),
+                "video_path": str(video_path),
+                "prompt": prompt or None,
+            }
+            if lora_strength is not None:
+                kwargs["lora_strength"] = lora_strength
+            if video_strength is not None:
+                kwargs["video_strength"] = video_strength
+
+            with _GPU_LOCK:
+                pipeline_runtime.generate(**kwargs)
+
+            if not output_path.exists():
+                raise HTTPException(500, "generation completed but no output file was produced")
+
+            return FileResponse(
+                output_path,
+                media_type="video/mp4",
+                filename=f"idle_animation_{request_id}.mp4",
+            )
+        except FileNotFoundError:
+            raise HTTPException(500, "output file not found after generation")
+        except Exception as e:
+            raise HTTPException(500, f"generation failed: {repr(e)}")
+
+    # ============= AVATAR ID MODE (ASYNCHRONOUS) =============
+    else:
+        avatar_id = avatar_id.strip()
+        if not avatar_id:
+            raise HTTPException(400, "avatar_id is required and cannot be empty")
+
+        request_id = uuid.uuid4().hex[:12]
+        video_path = DEFAULT_VIDEO
+
+        with _JOB_LOCK:
+            JOBS[request_id] = {
+                "status": "pending",
+                "avatar_id": avatar_id,
+                "video": video_path.name,
+                "submitted_at": _now(),
+            }
+
+        threading.Thread(
+            target=run_idle_job,
+            args=(request_id, avatar_id, video_path, None, lora_strength, video_strength),
+            daemon=True,
+        ).start()
+        return {"request_id": request_id, **JOBS[request_id]}
+
+
 @app.get("/jobs/{request_id}")
 def get_job(request_id: str):
-    job = integrations.get_job(request_id)
-    if not job:
+    if request_id not in JOBS:
         raise HTTPException(404, "request not found")
-    # Remove MongoDB _id from response
-    job.pop("_id", None)
-    return job
+    return JOBS[request_id]
 
 
 @app.get("/jobs/{request_id}/result")
 def get_result(request_id: str):
-    job = integrations.get_job(request_id)
-    if not job:
+    if request_id not in JOBS:
         raise HTTPException(404, "request not found")
-    if job.get("status") != "done":
-        raise HTTPException(409, f"job not done (status={job.get('status')})")
-    return FileResponse(ROOT / job["result"], media_type="video/mp4", filename=f"motion_transfer_{request_id}.mp4")
+    if JOBS[request_id].get("status") != "done":
+        raise HTTPException(409, f"job not done (status={JOBS[request_id].get('status')})")
+    return FileResponse(ROOT / JOBS[request_id]["result"], media_type="video/mp4", filename=f"motion_transfer_{request_id}.mp4")
 
 
 app.mount("/static", StaticFiles(directory=str(STATIC)), name="static")
