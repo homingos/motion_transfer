@@ -54,6 +54,7 @@ app = modal.App(APP_NAME, image=image)
     volumes={MODELS_DIR: models_volume},
     secrets=[mongodb_secret, r2_secret],   # /idle-motion: Mongo status + R2 upload creds
     enable_memory_snapshot=True,   # snapshot CPU RAM so cold starts skip the ~20-min weight read
+    environment_variables={"API_MODE": "r2_only"},  # dev: only avatar_id mode (no direct image upload)
 )
 @modal.concurrent(max_inputs=MAX_CONCURRENT_INPUTS)
 class MotionTransferInferenceDev:

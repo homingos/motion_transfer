@@ -28,6 +28,7 @@ OUTPUTS = ROOT / "outputs"
 DEFAULT_VIDEO = ROOT / "assets" / "idle_avatar_15_reverse.mp4"
 DEFAULT_PROMPT = (
     "A person facing the camera with subtle head and shoulder movement, "
+    "minimal facial expression, no eyebrow movement, closed mouth, natural blinking, "
     "professional headshot lighting, neutral background, photorealistic"
 )
 

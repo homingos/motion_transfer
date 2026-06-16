@@ -61,6 +61,7 @@ LORA = MODELS / "ic-lora" / "ltx-2.3-22b-ic-lora-motion-track-control-ref0.5.saf
 
 DEFAULT_PROMPT = (
     "A person facing the camera with subtle head and shoulder movement, "
+    "minimal facial expression, no eyebrow movement, closed mouth, natural blinking, "
     "professional headshot lighting, neutral background, photorealistic"
 )
 
@@ -71,7 +72,7 @@ DEFAULT_WIDTH = 768
 DEFAULT_NUM_FRAMES = 121
 DEFAULT_FRAME_RATE = 25.0
 DEFAULT_LORA_STRENGTH = 0.8
-DEFAULT_VIDEO_STRENGTH = 1.0
+DEFAULT_VIDEO_STRENGTH = 0.85
 DEFAULT_IMAGE_STRENGTH = 1.0
 IMAGE_CONDITIONING_FRAME = 0
 IMAGE_CONDITIONING_CRF = 33
@@ -81,6 +82,14 @@ IMAGE_CONDITIONING_CRF = 33
 _LOCK = threading.Lock()
 _PIPELINE: ICLoraPipeline | None = None
 _REGISTRY: StateDictRegistry | None = None
+
+# Prompt embedding cache: prompt_text -> EmbeddingsProcessorOutput
+# Populated during prewarm as a side effect. Never touched in snap=True phase.
+_PROMPT_CACHE: dict[str, object] = {}
+
+# Resident transformer cache: "s1"/"s2" -> live X0Model on GPU VRAM
+# Populated during prewarm. Eliminates ~12-13s of CPU->GPU transfer per request.
+_RESIDENT_TRANSFORMERS: dict[str, object] = {}
 
 
 def _build_pipeline() -> ICLoraPipeline:
@@ -153,12 +162,14 @@ def bind_pipeline_to_gpu() -> None:
 
 
 def prewarm_weights() -> None:
-    """Run one throwaway generation on the bundled sample so all model weights are
-    loaded into the shared registry up front. After this returns, real requests are
-    warm (~42s) instead of paying the cold model-load (~minutes) on the first one.
+    """Run one optimized generation to load weights and populate caches.
 
-    Blocking and slow (roughly the cold-start time) — call it on a background thread
-    so the server can still bind its port immediately.
+    Installs two caches during prewarm so subsequent requests are fast:
+    - Prompt embedding cache: DEFAULT_PROMPT cached, eliminates ~10-14s per call
+    - Resident transformer cache: s1 & s2 kept in GPU VRAM, eliminates ~12-13s per call
+
+    Prewarm uses skip_stage_2=True + short clip (49 frames) to finish in ~29s.
+    After caches are installed, warm requests complete in ~14-17s instead of ~38-42s.
     """
     if not SAMPLE_IMAGE.exists() or not SAMPLE_VIDEO.exists():
         logger.warning("[runtime] pre-warm skipped: sample assets missing (%s / %s); "
@@ -167,13 +178,62 @@ def prewarm_weights() -> None:
         return
 
     t0 = time.perf_counter()
-    logger.info("[runtime] pre-warming: running one sample generation to load weights "
-                "(this is the slow cold load, done once)...")
+    logger.info("[runtime] pre-warming (optimised: skip_stage_2, short clip, cache install)...")
+
+    import ltx_pipelines.ic_lora as _ic_lora
+    from ltx_pipelines.utils.helpers import encode_prompts as _orig_encode
+
+    with _LOCK:
+        pipeline = _build_pipeline()
+
+    # --- Patch 1: caching shim for encode_prompts ---
+    def _encode_cached(prompts, model_ledger, **kw):
+        if len(prompts) == 1 and not kw.get("enhance_first_prompt") and prompts[0] in _PROMPT_CACHE:
+            logger.info("[cache] encode_prompts HIT")
+            return [_PROMPT_CACHE[prompts[0]]]
+        results = _orig_encode(prompts, model_ledger, **kw)
+        if len(prompts) == 1 and not kw.get("enhance_first_prompt"):
+            _PROMPT_CACHE[prompts[0]] = results[0]
+            logger.info("[cache] encode_prompts: cached prompt (%d chars)", len(prompts[0]))
+        return results
+    _ic_lora.encode_prompts = _encode_cached
+
+    # --- Patch 2: saving shim for stage_1 transformer ---
+    _s1_ledger = pipeline.stage_1_model_ledger
+    _orig_s1_transformer = _s1_ledger.__class__.transformer
+
+    def _save_s1(self):
+        model = _orig_s1_transformer(self)
+        _RESIDENT_TRANSFORMERS["s1"] = model
+        logger.info("[cache] s1 transformer saved to resident cache")
+        return model
+    _s1_ledger.transformer = lambda: _save_s1(_s1_ledger)
+
+    # --- Run a fast prewarm: skip stage 2, short clip ---
     with tempfile.TemporaryDirectory() as td:
         out = str(Path(td) / "prewarm.mp4")
-        generate(image_path=str(SAMPLE_IMAGE), output_path=out, video_path=str(SAMPLE_VIDEO))
-    logger.info("[runtime] pre-warm complete in %.1fs; %d state dicts cached. Requests are now warm.",
-                time.perf_counter() - t0, 0 if _REGISTRY is None else len(_REGISTRY._state_dicts))
+        generate(
+            image_path=str(SAMPLE_IMAGE),
+            output_path=out,
+            video_path=str(SAMPLE_VIDEO),
+            num_frames=49,          # shorter clip: fewer denoise steps
+            skip_stage_2=True,      # skip ~8.5s of stage-2 work
+        )
+
+    # --- Build + cache s2 transformer (weights in registry from snapshot) ---
+    with _LOCK:
+        t2 = time.perf_counter()
+        logger.info("[cache] building resident s2 transformer...")
+        _RESIDENT_TRANSFORMERS["s2"] = pipeline.stage_2_model_ledger.transformer()
+        logger.info("[cache] s2 transformer resident in %.1fs", time.perf_counter() - t2)
+
+        # --- Rebind both ledgers to return cached instances ---
+        pipeline.stage_1_model_ledger.transformer = lambda: _RESIDENT_TRANSFORMERS["s1"]
+        pipeline.stage_2_model_ledger.transformer = lambda: _RESIDENT_TRANSFORMERS["s2"]
+        logger.info("[cache] both ledger.transformer() rebound to resident GPU cache")
+
+    logger.info("[runtime] pre-warm complete in %.1fs; prompt_cache=%d, transformers=%s",
+                time.perf_counter() - t0, len(_PROMPT_CACHE), list(_RESIDENT_TRANSFORMERS))
 
 
 # Accessors used by a real generation; calling each populates the shared registry.

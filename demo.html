@@ -1,0 +1,663 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Motion Transfer Demo - Dev & Feat Environments</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        .header {
+            text-align: center;
+            color: white;
+            margin-bottom: 40px;
+        }
+
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            font-size: 1.1em;
+            opacity: 0.9;
+        }
+
+        .environments {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 30px;
+            margin-bottom: 30px;
+        }
+
+        @media (max-width: 1024px) {
+            .environments {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .env-card {
+            background: white;
+            border-radius: 12px;
+            padding: 30px;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+            transition: transform 0.3s ease;
+        }
+
+        .env-card:hover {
+            transform: translateY(-5px);
+        }
+
+        .env-card.dev {
+            border-top: 4px solid #ff6b6b;
+        }
+
+        .env-card.feat {
+            border-top: 4px solid #4ecdc4;
+        }
+
+        .env-header {
+            margin-bottom: 25px;
+        }
+
+        .env-header h2 {
+            font-size: 1.8em;
+            margin-bottom: 5px;
+        }
+
+        .env-header .label {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 0.85em;
+            font-weight: 600;
+            margin-bottom: 10px;
+        }
+
+        .dev .label {
+            background: #ffe0e0;
+            color: #d63031;
+        }
+
+        .feat .label {
+            background: #e0f7f6;
+            color: #00897b;
+        }
+
+        .env-url {
+            background: #f5f5f5;
+            padding: 12px;
+            border-radius: 6px;
+            font-family: 'Courier New', monospace;
+            font-size: 0.9em;
+            word-break: break-all;
+            margin-bottom: 20px;
+            color: #333;
+        }
+
+        .mode-description {
+            background: #f9f9f9;
+            padding: 15px;
+            border-radius: 6px;
+            margin-bottom: 20px;
+            line-height: 1.6;
+            color: #555;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 600;
+            color: #333;
+        }
+
+        .form-group input,
+        .form-group textarea,
+        .form-group select {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            font-family: inherit;
+            font-size: 1em;
+        }
+
+        .form-group input:focus,
+        .form-group textarea:focus,
+        .form-group select:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+
+        .form-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+        }
+
+        .buttons {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            margin-top: 20px;
+        }
+
+        button {
+            padding: 12px 20px;
+            border: none;
+            border-radius: 6px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            font-size: 1em;
+        }
+
+        .dev button.primary {
+            background: #ff6b6b;
+            color: white;
+        }
+
+        .dev button.primary:hover {
+            background: #ee5a52;
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(255, 107, 107, 0.3);
+        }
+
+        .feat button.primary {
+            background: #4ecdc4;
+            color: white;
+        }
+
+        .feat button.primary:hover {
+            background: #45b9b0;
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(78, 205, 196, 0.3);
+        }
+
+        button.secondary {
+            background: #f0f0f0;
+            color: #333;
+            grid-column: 2;
+        }
+
+        button.secondary:hover {
+            background: #e0e0e0;
+        }
+
+        .response {
+            background: #f5f5f5;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            padding: 15px;
+            margin-top: 20px;
+            max-height: 300px;
+            overflow-y: auto;
+            display: none;
+            font-family: 'Courier New', monospace;
+            font-size: 0.9em;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            color: #333;
+        }
+
+        .response.show {
+            display: block;
+        }
+
+        .response.success {
+            background: #e8f5e9;
+            border-color: #4caf50;
+            color: #2e7d32;
+        }
+
+        .response.error {
+            background: #ffebee;
+            border-color: #f44336;
+            color: #c62828;
+        }
+
+        .status-badge {
+            display: inline-block;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 0.85em;
+            font-weight: 600;
+            margin-top: 10px;
+        }
+
+        .status-badge.loading {
+            background: #fff3cd;
+            color: #856404;
+        }
+
+        .status-badge.success {
+            background: #d4edda;
+            color: #155724;
+        }
+
+        .status-badge.error {
+            background: #f8d7da;
+            color: #721c24;
+        }
+
+        .spinner {
+            display: inline-block;
+            width: 16px;
+            height: 16px;
+            border: 2px solid #f3f3f3;
+            border-top: 2px solid #667eea;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-right: 8px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .info-box {
+            background: #e3f2fd;
+            border-left: 4px solid #2196f3;
+            padding: 15px;
+            border-radius: 4px;
+            margin-top: 20px;
+            color: #1565c0;
+            font-size: 0.95em;
+            line-height: 1.6;
+        }
+
+        .tabs {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+            border-bottom: 2px solid #eee;
+        }
+
+        .tab-btn {
+            padding: 10px 20px;
+            border: none;
+            background: none;
+            cursor: pointer;
+            font-weight: 600;
+            color: #999;
+            border-bottom: 3px solid transparent;
+            margin-bottom: -2px;
+            transition: all 0.3s ease;
+        }
+
+        .dev .tab-btn.active {
+            color: #ff6b6b;
+            border-bottom-color: #ff6b6b;
+        }
+
+        .feat .tab-btn.active {
+            color: #4ecdc4;
+            border-bottom-color: #4ecdc4;
+        }
+
+        .tab-content {
+            display: none;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🎬 Motion Transfer Demo</h1>
+            <p>Test both Dev (R2 Mode) and Feat (Direct Upload) environments</p>
+        </div>
+
+        <div class="environments">
+            <!-- Dev Environment -->
+            <div class="env-card dev">
+                <div class="env-header">
+                    <h2>Dev Environment</h2>
+                    <span class="label">R2 MODE - Avatar ID</span>
+                </div>
+                <div class="env-url">https://ai-team-flam-dev--motion-transfer-dev.modal.run</div>
+                <div class="mode-description">
+                    <strong>How it works:</strong> You provide an avatar ID, the system finds the image in R2 storage, generates the motion, and saves it back to R2. Perfect for production workflows with existing avatars.
+                </div>
+
+                <div class="tabs">
+                    <button class="tab-btn active" onclick="switchTab(event, 'dev-generate')">Generate</button>
+                    <button class="tab-btn" onclick="switchTab(event, 'dev-status')">Check Status</button>
+                    <button class="tab-btn" onclick="switchTab(event, 'dev-info')">Avatar Info</button>
+                </div>
+
+                <!-- Generate Tab -->
+                <div id="dev-generate" class="tab-content active">
+                    <div class="form-group">
+                        <label>Avatar ID</label>
+                        <input type="text" id="dev-avatar-id" placeholder="e.g., 507f1f77bcf86cd799439011" value="">
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>LoRA Strength (0-1)</label>
+                            <input type="number" id="dev-lora" min="0" max="1" step="0.1" value="0.8">
+                        </div>
+                        <div class="form-group">
+                            <label>Video Strength (0-1)</label>
+                            <input type="number" id="dev-video" min="0" max="1" step="0.1" value="0.85">
+                        </div>
+                    </div>
+                    <button class="primary" onclick="devGenerate()">Submit Generation</button>
+                    <div id="dev-response" class="response"></div>
+                    <div class="info-box">
+                        💡 <strong>Tip:</strong> After submitting, you'll get a request_id. Use the "Check Status" tab to monitor progress. Takes 2-5 minutes.
+                    </div>
+                </div>
+
+                <!-- Status Tab -->
+                <div id="dev-status" class="tab-content">
+                    <div class="form-group">
+                        <label>Request ID</label>
+                        <input type="text" id="dev-request-id" placeholder="e.g., abc123def456">
+                    </div>
+                    <div class="buttons">
+                        <button class="primary" onclick="devCheckStatus()">Check Status</button>
+                        <button class="secondary" onclick="devDownloadResult()">Download MP4</button>
+                    </div>
+                    <div id="dev-status-response" class="response"></div>
+                </div>
+
+                <!-- Info Tab -->
+                <div id="dev-info" class="tab-content">
+                    <div class="form-group">
+                        <label>Avatar ID</label>
+                        <input type="text" id="dev-info-avatar-id" placeholder="e.g., 507f1f77bcf86cd799439011">
+                    </div>
+                    <button class="primary" onclick="devGetInfo()">Get Avatar Info</button>
+                    <div id="dev-info-response" class="response"></div>
+                    <div class="info-box">
+                        💡 <strong>Info:</strong> Check if avatar exists, where the image is stored, and if animation is ready.
+                    </div>
+                </div>
+            </div>
+
+            <!-- Feat Environment -->
+            <div class="env-card feat">
+                <div class="env-header">
+                    <h2>Feat Environment</h2>
+                    <span class="label">DIRECT MODE - Image Upload</span>
+                </div>
+                <div class="env-url">https://ai-team-flam-feat--motion-transfer-feat.modal.run</div>
+                <div class="mode-description">
+                    <strong>How it works:</strong> Upload an image directly and get the MP4 video back immediately (waits for processing). Great for quick testing and demos without needing a pre-existing avatar.
+                </div>
+
+                <div class="tabs">
+                    <button class="tab-btn active" onclick="switchTab(event, 'feat-upload')">Upload Image</button>
+                    <button class="tab-btn" onclick="switchTab(event, 'feat-avatar')">Avatar ID Mode</button>
+                </div>
+
+                <!-- Upload Tab -->
+                <div id="feat-upload" class="tab-content active">
+                    <div class="form-group">
+                        <label>Image File (JPG or PNG)</label>
+                        <input type="file" id="feat-image" accept="image/jpeg,image/png">
+                    </div>
+                    <div class="form-group">
+                        <label>Motion Prompt (optional)</label>
+                        <input type="text" id="feat-prompt" placeholder="e.g., happy, dancing, waving">
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>LoRA Strength (0-1)</label>
+                            <input type="number" id="feat-lora" min="0" max="1" step="0.1" value="0.8">
+                        </div>
+                        <div class="form-group">
+                            <label>Video Strength (0-1)</label>
+                            <input type="number" id="feat-video" min="0" max="1" step="0.1" value="0.85">
+                        </div>
+                    </div>
+                    <button class="primary" onclick="featUpload()">Upload & Generate</button>
+                    <div id="feat-response" class="response"></div>
+                    <div class="info-box">
+                        💡 <strong>Tip:</strong> Upload your image and wait 2-5 minutes. The system will process and return your MP4 video directly.
+                    </div>
+                </div>
+
+                <!-- Avatar ID Tab -->
+                <div id="feat-avatar" class="tab-content">
+                    <div class="form-group">
+                        <label>Avatar ID</label>
+                        <input type="text" id="feat-avatar-id" placeholder="e.g., 507f1f77bcf86cd799439011">
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>LoRA Strength (0-1)</label>
+                            <input type="number" id="feat-avatar-lora" min="0" max="1" step="0.1" value="0.8">
+                        </div>
+                        <div class="form-group">
+                            <label>Video Strength (0-1)</label>
+                            <input type="number" id="feat-avatar-video" min="0" max="1" step="0.1" value="0.85">
+                        </div>
+                    </div>
+                    <button class="primary" onclick="featAvatarGenerate()">Submit Generation</button>
+                    <div id="feat-avatar-response" class="response"></div>
+                    <div class="info-box">
+                        💡 <strong>Tip:</strong> Same as Dev environment. Async generation using avatar ID.
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        function switchTab(e, tabName) {
+            e.preventDefault();
+            const btn = e.target;
+            const card = btn.closest('.env-card');
+
+            // Hide all tabs in this card
+            card.querySelectorAll('.tab-content').forEach(tab => {
+                tab.classList.remove('active');
+            });
+
+            // Deactivate all buttons
+            card.querySelectorAll('.tab-btn').forEach(b => {
+                b.classList.remove('active');
+            });
+
+            // Show selected tab and activate button
+            document.getElementById(tabName).classList.add('active');
+            btn.classList.add('active');
+        }
+
+        function showResponse(elementId, data, isError = false) {
+            const el = document.getElementById(elementId);
+            el.textContent = JSON.stringify(data, null, 2);
+            el.classList.add('show');
+            el.classList.toggle('error', isError);
+            el.classList.toggle('success', !isError);
+        }
+
+        async function devGenerate() {
+            const avatarId = document.getElementById('dev-avatar-id').value.trim();
+            const lora = document.getElementById('dev-lora').value;
+            const video = document.getElementById('dev-video').value;
+
+            if (!avatarId) {
+                showResponse('dev-response', { error: 'Avatar ID is required' }, true);
+                return;
+            }
+
+            const formData = new FormData();
+            formData.append('avatar_id', avatarId);
+            if (lora) formData.append('lora_strength', lora);
+            if (video) formData.append('video_strength', video);
+
+            try {
+                const response = await fetch('https://ai-team-flam-dev--motion-transfer-dev.modal.run/idle-motion', {
+                    method: 'POST',
+                    body: formData
+                });
+                const data = await response.json();
+                showResponse('dev-response', data, !response.ok);
+                if (response.ok) {
+                    document.getElementById('dev-request-id').value = data.request_id;
+                }
+            } catch (error) {
+                showResponse('dev-response', { error: error.message }, true);
+            }
+        }
+
+        async function devCheckStatus() {
+            const requestId = document.getElementById('dev-request-id').value.trim();
+            if (!requestId) {
+                showResponse('dev-status-response', { error: 'Request ID is required' }, true);
+                return;
+            }
+
+            try {
+                const response = await fetch(`https://ai-team-flam-dev--motion-transfer-dev.modal.run/jobs/${requestId}`);
+                const data = await response.json();
+                showResponse('dev-status-response', data, !response.ok);
+            } catch (error) {
+                showResponse('dev-status-response', { error: error.message }, true);
+            }
+        }
+
+        async function devDownloadResult() {
+            const requestId = document.getElementById('dev-request-id').value.trim();
+            if (!requestId) {
+                showResponse('dev-status-response', { error: 'Request ID is required' }, true);
+                return;
+            }
+
+            try {
+                const response = await fetch(`https://ai-team-flam-dev--motion-transfer-dev.modal.run/jobs/${requestId}/result`);
+                if (!response.ok) {
+                    showResponse('dev-status-response', { error: 'Video not ready yet' }, true);
+                    return;
+                }
+                const blob = await response.blob();
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `motion_${requestId}.mp4`;
+                a.click();
+                showResponse('dev-status-response', { message: 'Download started!' });
+            } catch (error) {
+                showResponse('dev-status-response', { error: error.message }, true);
+            }
+        }
+
+        async function devGetInfo() {
+            const avatarId = document.getElementById('dev-info-avatar-id').value.trim();
+            if (!avatarId) {
+                showResponse('dev-info-response', { error: 'Avatar ID is required' }, true);
+                return;
+            }
+
+            try {
+                const response = await fetch(`https://ai-team-flam-dev--motion-transfer-dev.modal.run/avatar/${avatarId}/info`);
+                const data = await response.json();
+                showResponse('dev-info-response', data, !response.ok);
+            } catch (error) {
+                showResponse('dev-info-response', { error: error.message }, true);
+            }
+        }
+
+        async function featUpload() {
+            const file = document.getElementById('feat-image').files[0];
+            const prompt = document.getElementById('feat-prompt').value;
+            const lora = document.getElementById('feat-lora').value;
+            const video = document.getElementById('feat-video').value;
+
+            if (!file) {
+                showResponse('feat-response', { error: 'Please select an image file' }, true);
+                return;
+            }
+
+            const formData = new FormData();
+            formData.append('image', file);
+            if (prompt) formData.append('prompt', prompt);
+            if (lora) formData.append('lora_strength', lora);
+            if (video) formData.append('video_strength', video);
+
+            try {
+                const el = document.getElementById('feat-response');
+                el.textContent = 'Uploading and processing... This may take 2-5 minutes...';
+                el.classList.add('show');
+
+                const response = await fetch('https://ai-team-flam-feat--motion-transfer-feat.modal.run/animate', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (!response.ok) {
+                    const data = await response.json();
+                    showResponse('feat-response', data, true);
+                    return;
+                }
+
+                const blob = await response.blob();
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'motion_transfer.mp4';
+                a.click();
+
+                showResponse('feat-response', { message: 'Success! Video downloaded. File: motion_transfer.mp4' });
+            } catch (error) {
+                showResponse('feat-response', { error: error.message }, true);
+            }
+        }
+
+        async function featAvatarGenerate() {
+            const avatarId = document.getElementById('feat-avatar-id').value.trim();
+            const lora = document.getElementById('feat-avatar-lora').value;
+            const video = document.getElementById('feat-avatar-video').value;
+
+            if (!avatarId) {
+                showResponse('feat-avatar-response', { error: 'Avatar ID is required' }, true);
+                return;
+            }
+
+            const formData = new FormData();
+            formData.append('avatar_id', avatarId);
+            if (lora) formData.append('lora_strength', lora);
+            if (video) formData.append('video_strength', video);
+
+            try {
+                const response = await fetch('https://ai-team-flam-feat--motion-transfer-feat.modal.run/idle-motion', {
+                    method: 'POST',
+                    body: formData
+                });
+                const data = await response.json();
+                showResponse('feat-avatar-response', data, !response.ok);
+            } catch (error) {
+                showResponse('feat-avatar-response', { error: error.message }, true);
+            }
+        }
+    </script>
+</body>
+</html>

@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>LTX-2 Motion Transfer</title>
+  <title>Flam Idle Motion</title>
   <style>
     :root {
       --bg: #0b0c10; --bg-grad-1: #1a1640;
@@ -129,35 +129,35 @@
 <body>
   <div class="wrap">
     <header>
-      <div class="badge"><span class="dot"></span> LTX-2 · Motion Transfer</div>
-      <h1>Bring a photo to life</h1>
-      <p class="subtitle">Give it an image and a reference motion — get back a video of your image moving the same way.</p>
+      <div class="badge"><span class="dot"></span> Flam · Idle Motion</div>
+      <h1>Create Avatar Motion</h1>
+      <p class="subtitle">Upload your avatar photo and generate a natural idle animation with subtle movement.</p>
     </header>
 
     <div class="card">
       <form id="form">
         <div class="field">
-          <div class="lab">Subject image <span class="opt">PNG / JPG · required</span></div>
+          <div class="lab">Avatar Image <span class="opt">PNG / JPG · required</span></div>
           <label class="drop" id="dropImage">
             <input type="file" name="image" accept="image/*" required />
             <div class="ic">🖼️</div>
-            <div class="txt"><b id="imageName">Click or drop an image</b><span>The person who will move</span></div>
+            <div class="txt"><b id="imageName">Click or drop an image</b><span>Your avatar face photo</span></div>
           </label>
         </div>
         <div class="field">
-          <div class="lab">Reference motion <span class="opt">optional · uses default if empty</span></div>
+          <div class="lab">Animation Style <span class="opt">optional · uses default if empty</span></div>
           <label class="drop" id="dropVideo">
             <input type="file" name="video" accept="video/*" />
             <div class="ic">🎬</div>
-            <div class="txt"><b id="videoName">Click or drop a video</b><span>The motion to copy</span></div>
+            <div class="txt"><b id="videoName">Click or drop a video</b><span>Reference animation style</span></div>
           </label>
         </div>
         <div class="field wide">
-          <div class="lab">Prompt <span class="opt">optional · a sensible default is used if blank</span></div>
-          <textarea name="prompt" rows="2" placeholder="e.g. a person smiling and looking around, photorealistic, soft studio lighting"></textarea>
+          <div class="lab">Motion Description <span class="opt">optional · describes the animation</span></div>
+          <textarea name="prompt" rows="2" placeholder="e.g. subtle breathing with gentle head movement, natural and lifelike"></textarea>
         </div>
         <button type="submit" id="submit" class="gen"><span class="spinner"></span><span id="btnText">Generate video</span></button>
-        <p class="hint">Warm requests take about <strong>40 seconds</strong>. The first request after a restart loads the model and can take several minutes.</p>
+        <p class="hint">Generation takes about <strong>30-40 seconds</strong>. Processing uses AI to create natural idle motion for your avatar.</p>
       </form>
     </div>
 
@@ -167,10 +167,10 @@
     <!-- 1 -> 2 -> 3, equal-size panels -->
     <div class="pipeline">
       <div class="stage">
-        <div class="head"><span class="num">1</span><h3>Subject image</h3></div>
+        <div class="head"><span class="num">1</span><h3>Avatar Photo</h3></div>
         <div class="media" id="imageMedia">
           <img id="imagePreview" alt="" />
-          <div class="ph"><span class="pic">🖼️</span> Upload an image</div>
+          <div class="ph"><span class="pic">🖼️</span> Upload your avatar</div>
         </div>
         <div class="tag" id="imageTag">input</div>
       </div>
@@ -178,27 +178,27 @@
       <div class="arrow">→</div>
 
       <div class="stage">
-        <div class="head"><span class="num">2</span><h3>Reference motion</h3></div>
+        <div class="head"><span class="num">2</span><h3>Motion Reference</h3></div>
         <div class="media" id="refMedia">
           <video id="referencePreview" playsinline muted loop autoplay></video>
-          <div class="ph"><span class="pic">🎬</span> Reference clip</div>
+          <div class="ph"><span class="pic">🎬</span> Animation style</div>
         </div>
-        <div class="tag" id="refTag">default clip</div>
+        <div class="tag" id="refTag">default style</div>
       </div>
 
       <div class="arrow">→</div>
 
       <div class="stage out">
-        <div class="head"><span class="num">3</span><h3>Generated video</h3></div>
+        <div class="head"><span class="num">3</span><h3>Idle Animation</h3></div>
         <div class="media" id="resultMedia">
           <video id="result" controls playsinline muted loop autoplay></video>
-          <div class="ph"><span class="pic">✨</span> Your result appears here</div>
+          <div class="ph"><span class="pic">✨</span> Your animation will appear here</div>
         </div>
         <div class="tag" id="resultTag">output</div>
       </div>
     </div>
 
-    <footer>API: <code>POST /generate</code> → poll <code>GET /jobs/{id}</code> → <code>GET /jobs/{id}/result</code></footer>
+    <footer>Flam Idle Motion Generation API</footer>
   </div>
 
   <script>
@@ -291,9 +291,9 @@
       try {
         const r = await fetch("/generate", { method: "POST", body: fd });
         if (!r.ok) { const txt = await r.text(); throw new Error(`${r.status} ${txt}`); }
-        const { job_id, image, video: vid, used_default_video } = await r.json();
-        metaEl.textContent = `Image: ${image} · Reference: ${vid}${used_default_video ? " (default)" : ""} · Job: ${job_id}`;
-        startTicker("Generating"); pollJob(job_id, Date.now());
+        const { request_id, image, video: vid, used_default_video } = await r.json();
+        metaEl.textContent = `Image: ${image} · Reference: ${vid}${used_default_video ? " (default)" : ""} · Job: ${request_id}`;
+        startTicker("Generating"); pollJob(request_id, Date.now());
       } catch (err) { stopTicker(); setStatus(`Submission failed: ${err.message}`, "failed"); resetButton(); }
     });
   </script>
