@@ -19,6 +19,7 @@ give it a distinct app name so it doesn't collide with prod.
 """
 
 from pathlib import Path
+import os
 
 import modal
 
@@ -26,6 +27,9 @@ from modal_common import (
     APP_BASENAME, MODELS_DIR,
     build_modal_image, models_volume, mongodb_secret, r2_secret,
 )
+
+# Set API mode for this environment
+os.environ["API_MODE"] = "r2_only"
 
 APP_NAME = APP_BASENAME          # same name; isolated by the `dev` environment
 
@@ -54,7 +58,6 @@ app = modal.App(APP_NAME, image=image)
     volumes={MODELS_DIR: models_volume},
     secrets=[mongodb_secret, r2_secret],   # /idle-motion: Mongo status + R2 upload creds
     enable_memory_snapshot=True,   # snapshot CPU RAM so cold starts skip the ~20-min weight read
-    environment_variables={"API_MODE": "r2_only"},  # dev: only avatar_id mode (no direct image upload)
 )
 @modal.concurrent(max_inputs=MAX_CONCURRENT_INPUTS)
 class MotionTransferInferenceDev:

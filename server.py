@@ -37,6 +37,7 @@ UPLOADS.mkdir(parents=True, exist_ok=True)
 OUTPUTS.mkdir(parents=True, exist_ok=True)
 
 # Environment-specific API mode: "full" (both image + avatar_id) or "r2_only" (avatar_id only)
+# Set by modal_app_dev.py (r2_only) or modal_app_feat.py (full) before import
 API_MODE = os.environ.get("API_MODE", "full")
 
 
