@@ -187,7 +187,7 @@ async def generate(
     video: UploadFile | None = File(None, description="Reference motion video (optional; defaults to assets/idle_avatar_15_reverse.mp4)"),
     prompt: str | None = Form(None, description="Text prompt (optional; main.py has a sensible default)"),
     lora_strength: float | None = Form(None, description="LoRA strength (optional, 0.0-1.0; default 0.8)"),
-    video_strength: float | None = Form(None, description="Video conditioning strength (optional, 0.0-1.0; default 0.85)"),
+    video_strength: float | None = Form(None, description="Video conditioning strength (optional, 0.0-1.0; default 0.95)"),
 ):
     request_id = uuid.uuid4().hex[:12]
 
@@ -227,7 +227,7 @@ async def idle_motion(
     avatar_id: str = Form(..., description="Avatar id — ObjectId _id of the fableface.templates doc. "
                                           "The subject image is read from its source_assets.image_key (R2)."),
     lora_strength: float | None = Form(None, description="LoRA strength (optional, 0.0-1.0; default 0.8)"),
-    video_strength: float | None = Form(None, description="Video conditioning strength (optional, 0.0-1.0; default 0.85)"),
+    video_strength: float | None = Form(None, description="Video conditioning strength (optional, 0.0-1.0; default 0.95)"),
 ):
     """Generate an idle-motion video for an avatar from its avatar_id alone.
 
@@ -366,7 +366,7 @@ async def animate(
     avatar_id: str | None = Form(None, description="Avatar id (ObjectId). If provided, returns request_id for async polling (R2 lookup required)."),
     prompt: str | None = Form(None, description="Text prompt (optional)"),
     lora_strength: float | None = Form(None, description="LoRA strength (optional, 0.0-1.0; default 0.8)"),
-    video_strength: float | None = Form(None, description="Video conditioning strength (optional, 0.0-1.0; default 0.85)"),
+    video_strength: float | None = Form(None, description="Video conditioning strength (optional, 0.0-1.0; default 0.95)"),
     _: None = Depends(_public_api_key_guard),
 ):
     """Unified endpoint: image → MP4 directly; avatar_id → request_id for polling.
