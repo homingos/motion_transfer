@@ -176,6 +176,57 @@ def run_idle_job(request_id: str, avatar_id: str, video_path: Path, prompt: str 
             integrations.set_status(avatar_id, "failed", failure_reason=repr(e))
 
 
+def run_idle_job_with_url(request_id: str, image_url: str, video_path: Path, prompt: str | None,
+                          lora_strength: float | None = None, video_strength: float | None = None) -> None:
+    """Generate the idle-motion video from a GCS image URL.
+
+    Downloads the image from the provided GCS URL, generates the motion video,
+    and uploads the result to R2.
+    """
+    _update_job(request_id, status="fetching_source", image_url=image_url)
+
+    # Download the subject image from the GCS URL
+    try:
+        import requests
+        image_ext = ".png"
+        if "." in image_url.split("/")[-1]:
+            image_ext = "." + image_url.split(".")[-1]
+        image_path = UPLOADS / f"{request_id}_gcs_source{image_ext}"
+
+        response = requests.get(image_url, timeout=30)
+        response.raise_for_status()
+        image_path.write_bytes(response.content)
+    except Exception as e:
+        _update_job(request_id, status="failed", finished_at=_now(), error=repr(e))
+        return
+
+    _update_job(request_id, status="waiting_for_gpu")
+    with _GPU_LOCK:
+        _update_job(request_id, status="running", started_at=_now())
+        output_path = OUTPUTS / f"idle_{request_id}.mp4"
+        try:
+            kwargs = {
+                "image_path": str(image_path),
+                "output_path": str(output_path),
+                "video_path": str(video_path),
+                "prompt": prompt or None,
+            }
+            if lora_strength is not None:
+                kwargs["lora_strength"] = lora_strength
+            if video_strength is not None:
+                kwargs["video_strength"] = video_strength
+            pipeline_runtime.generate(**kwargs)
+            if not output_path.exists():
+                raise RuntimeError("generation finished but no output file was produced")
+            # Upload to R2 with a generic key
+            animation_key = f"motion/{request_id}/idle"
+            link = integrations.r2_upload(output_path, key=animation_key)
+            _update_job(request_id, status="done", finished_at=_now(),
+                 result=str(output_path.relative_to(ROOT)), animation_key=animation_key, link=link)
+        except Exception as e:
+            _update_job(request_id, status="failed", finished_at=_now(), error=repr(e))
+
+
 @app.get("/", response_class=HTMLResponse)
 def index() -> str:
     return (STATIC / "index.html").read_text(encoding="utf-8")
@@ -224,22 +275,19 @@ async def generate(
 
 @app.post("/idle-motion")
 async def idle_motion(
-    avatar_id: str = Form(..., description="Avatar id — ObjectId _id of the fableface.templates doc. "
-                                          "The subject image is read from its source_assets.image_key (R2)."),
+    image_url: str = Form(..., description="GCS image URL — direct URL to the image to process."),
     lora_strength: float | None = Form(None, description="LoRA strength (optional, 0.0-1.0; default 0.8)"),
     video_strength: float | None = Form(None, description="Video conditioning strength (optional, 0.0-1.0; default 0.95)"),
 ):
-    """Generate an idle-motion video for an avatar from its avatar_id alone.
+    """Generate an idle-motion video from a GCS image URL.
 
-    Async: returns a request_id immediately. The subject image is fetched from R2 using the
-    template doc's source_assets.image_key; generation uses the bundled reference clip.
-    Status is tracked in MongoDB keyed by avatar_id (processing -> ready/failed); on
-    success the generated idle video is uploaded to R2 and its key is written to
-    source_assets.idle_animation_key before status flips to ready.
+    Async: returns a request_id immediately. The image is downloaded from the provided GCS URL;
+    generation uses the bundled reference clip. Status is tracked in memory; on success the
+    generated idle video is uploaded to R2.
     """
-    avatar_id = avatar_id.strip()
-    if not avatar_id:
-        raise HTTPException(400, "avatar_id is required")
+    image_url = image_url.strip()
+    if not image_url:
+        raise HTTPException(400, "image_url is required")
 
     request_id = uuid.uuid4().hex[:12]
     video_path = DEFAULT_VIDEO  # idle-motion always uses the bundled reference clip
@@ -247,12 +295,12 @@ async def idle_motion(
     with _JOB_LOCK:
         JOBS[request_id] = {
             "status": "pending",
-            "avatar_id": avatar_id,
+            "image_url": image_url,
             "video": video_path.name,
             "submitted_at": _now(),
         }
 
-    threading.Thread(target=run_idle_job, args=(request_id, avatar_id, video_path, None, lora_strength, video_strength),
+    threading.Thread(target=run_idle_job_with_url, args=(request_id, image_url, video_path, None, lora_strength, video_strength),
                      daemon=True).start()
     return {"request_id": request_id, **JOBS[request_id]}
 
