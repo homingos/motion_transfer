@@ -3,7 +3,7 @@
 ## Overview
 This is the **image upload mode** - you send an image file directly and get back the MP4 video immediately. No waiting, no polling.
 
-**URL**: `https://ai-team-flam-feat--motion-transfer-feat.modal.run`
+**URL**: `https://flam-feat--motion-transfer-feat.modal.run`
 
 ## How It Works (Plain Terms)
 
@@ -18,7 +18,7 @@ This is the **image upload mode** - you send an image file directly and get back
 **Upload image and get MP4 directly (takes 2-5 minutes)**
 
 ```bash
-curl -X POST https://ai-team-flam-feat--motion-transfer-feat.modal.run/animate \
+curl -X POST https://flam-feat--motion-transfer-feat.modal.run/animate \
   -F "image=@my_photo.jpg" \
   --output result.mp4
 ```
@@ -29,7 +29,7 @@ That's it! Your video is saved as `result.mp4`
 **Submit job and poll for status**
 
 ```bash
-curl -X POST https://ai-team-flam-feat--motion-transfer-feat.modal.run/idle-motion \
+curl -X POST https://flam-feat--motion-transfer-feat.modal.run/idle-motion \
   -F "avatar_id=507f1f77bcf86cd799439011"
 ```
 
@@ -47,14 +47,14 @@ Then check status like in R2 mode (see polling section below)
 **For avatar ID jobs, check progress**
 
 ```bash
-curl https://ai-team-flam-feat--motion-transfer-feat.modal.run/jobs/abc123def456
+curl https://flam-feat--motion-transfer-feat.modal.run/jobs/abc123def456
 ```
 
 ### 4. Download Result
 **Download video from avatar ID job**
 
 ```bash
-curl https://ai-team-flam-feat--motion-transfer-feat.modal.run/jobs/abc123def456/result \
+curl https://flam-feat--motion-transfer-feat.modal.run/jobs/abc123def456/result \
   --output result.mp4
 ```
 
@@ -62,7 +62,7 @@ curl https://ai-team-flam-feat--motion-transfer-feat.modal.run/jobs/abc123def456
 **Get avatar details**
 
 ```bash
-curl https://ai-team-flam-feat--motion-transfer-feat.modal.run/avatar/507f1f77bcf86cd799439011/info
+curl https://flam-feat--motion-transfer-feat.modal.run/avatar/507f1f77bcf86cd799439011/info
 ```
 
 ## Step-by-Step Examples
@@ -70,7 +70,7 @@ curl https://ai-team-flam-feat--motion-transfer-feat.modal.run/avatar/507f1f77bc
 ### Quick Method (Image Upload)
 ```bash
 # One command - upload image, get video back
-curl -X POST https://ai-team-flam-feat--motion-transfer-feat.modal.run/animate \
+curl -X POST https://flam-feat--motion-transfer-feat.modal.run/animate \
   -F "image=@my_photo.jpg" \
   --output my_video.mp4
 
@@ -80,14 +80,14 @@ curl -X POST https://ai-team-flam-feat--motion-transfer-feat.modal.run/animate \
 ### Async Method (Avatar ID)
 ```bash
 # 1. Submit job
-REQUEST_ID=$(curl -X POST https://ai-team-flam-feat--motion-transfer-feat.modal.run/idle-motion \
+REQUEST_ID=$(curl -X POST https://flam-feat--motion-transfer-feat.modal.run/idle-motion \
   -F "avatar_id=507f1f77bcf86cd799439011" | jq -r '.request_id')
 
 echo "Job ID: $REQUEST_ID"
 
 # 2. Check status every 10 seconds
 while true; do
-  STATUS=$(curl https://ai-team-flam-feat--motion-transfer-feat.modal.run/jobs/$REQUEST_ID | jq -r '.status')
+  STATUS=$(curl https://flam-feat--motion-transfer-feat.modal.run/jobs/$REQUEST_ID | jq -r '.status')
   echo "Status: $STATUS"
   if [ "$STATUS" = "done" ]; then
     break
@@ -96,7 +96,7 @@ while true; do
 done
 
 # 3. Download
-curl https://ai-team-flam-feat--motion-transfer-feat.modal.run/jobs/$REQUEST_ID/result \
+curl https://flam-feat--motion-transfer-feat.modal.run/jobs/$REQUEST_ID/result \
   --output my_video.mp4
 ```
 
@@ -110,7 +110,7 @@ curl https://ai-team-flam-feat--motion-transfer-feat.modal.run/jobs/$REQUEST_ID/
 
 Example with all options:
 ```bash
-curl -X POST https://ai-team-flam-feat--motion-transfer-feat.modal.run/animate \
+curl -X POST https://flam-feat--motion-transfer-feat.modal.run/animate \
   -F "image=@photo.jpg" \
   -F "prompt=happy, dancing" \
   -F "lora_strength=0.7" \

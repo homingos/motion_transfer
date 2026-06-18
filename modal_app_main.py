@@ -21,11 +21,11 @@ import modal
 
 from modal_common import (
     APP_BASENAME, MODELS_DIR,
-    build_modal_image, models_volume, mongodb_secret, r2_secret,
+    build_modal_image, models_volume, mongodb_secret,
 )
 
 # =============================================================================
-# Production configuration (ai-team-flam, Starter plan)
+# Production configuration (flam, Starter plan)
 # =============================================================================
 
 APP_NAME = APP_BASENAME                                  # "flam-motion-transfer"
@@ -36,7 +36,7 @@ GPU = "L40S"            # 48 GB VRAM — pipeline peaks ~20 GB
 CPU = 8
 MEMORY = 98304          # 96 GB RAM — weight load holds ~80 GB (40 GB would OOM)
 TIMEOUT = 3600          # 1h: first container start loads weights (~15-20 min)
-MIN_CONTAINERS = 0      # scale to zero — conserve the $30 credits (cold start on first hit)
+MIN_CONTAINERS = 1      # keep one container warm to avoid GPU provisioning delays and status tracking issues
 MAX_CONTAINERS = 1      # single GPU, serialized; in-memory job state (see note below)
 SCALEDOWN_WINDOW = 300  # keep warm 5 min after the last request
 MAX_CONCURRENT_INPUTS = 1  # the pipeline pins the whole GPU; one job at a time
@@ -64,7 +64,7 @@ app = modal.App(APP_NAME, image=image)
     max_containers=MAX_CONTAINERS,
     scaledown_window=SCALEDOWN_WINDOW,
     volumes={MODELS_DIR: models_volume},
-    secrets=[mongodb_secret, r2_secret],   # /idle-motion: Mongo status + R2 read/upload creds
+    secrets=[mongodb_secret],   # /idle-motion: MongoDB status tracking
     enable_memory_snapshot=True,   # snapshot CPU RAM so cold starts skip the ~18-min weight read
 )
 @modal.concurrent(max_inputs=MAX_CONCURRENT_INPUTS)
@@ -99,7 +99,7 @@ class MotionTransferInference:
         pipeline_runtime.bind_pipeline_to_gpu()
         pipeline_runtime.prewarm_weights()
 
-    @modal.asgi_app()
+    @modal.asgi_app(label="motion-transfer")
     def fastapi_app(self):
         # server.py's lifespan builds the pipeline object (cheap). Weights are already
         # resident in CPU RAM from the restored memory snapshot, so the first real
@@ -115,14 +115,13 @@ class MotionTransferInference:
 @app.local_entrypoint()
 def main():
     print("=" * 60)
-    print("🎬 FLAM — Motion Transfer · Deployment (ai-team-flam)")
+    print("🎬 FLAM — Motion Transfer · Deployment (flam)")
     print("=" * 60)
     print(f"  App name:  {APP_NAME}")
     print(f"  GPU:       {GPU}   CPU: {CPU}   RAM: {MEMORY} MB")
     print(f"  Scaling:   min={MIN_CONTAINERS} max={MAX_CONTAINERS} (scale-to-zero)")
     print()
-    print("  URL: shown in `modal deploy` output and on the Modal dashboard")
-    print("       (auto-generated *.modal.run — custom domains need a Team plan).")
+    print("  URL: https://flam--motion-transfer.modal.run")
     print("  Endpoints once deployed: /  /generate  /jobs/{id}  /jobs/{id}/result  /docs")
     print()
     print("🚀 Deploy:  modal deploy modal_app_main.py")

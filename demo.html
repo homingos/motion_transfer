@@ -340,7 +340,7 @@
                     <h2>Dev Environment</h2>
                     <span class="label">R2 MODE - Avatar ID</span>
                 </div>
-                <div class="env-url">https://ai-team-flam-dev--motion-transfer-dev.modal.run</div>
+                <div class="env-url">https://flam-dev--motion-transfer-dev.modal.run</div>
                 <div class="mode-description">
                     <strong>How it works:</strong> You provide an avatar ID, the system finds the image in R2 storage, generates the motion, and saves it back to R2. Perfect for production workflows with existing avatars.
                 </div>
@@ -407,7 +407,7 @@
                     <h2>Feat Environment</h2>
                     <span class="label">DIRECT MODE - Image Upload</span>
                 </div>
-                <div class="env-url">https://ai-team-flam-feat--motion-transfer-feat.modal.run</div>
+                <div class="env-url">https://flam-feat--motion-transfer-feat.modal.run</div>
                 <div class="mode-description">
                     <strong>How it works:</strong> Upload an image directly and get the MP4 video back immediately (waits for processing). Great for quick testing and demos without needing a pre-existing avatar.
                 </div>
@@ -515,7 +515,7 @@
             if (video) formData.append('video_strength', video);
 
             try {
-                const response = await fetch('https://ai-team-flam-dev--motion-transfer-dev.modal.run/idle-motion', {
+                const response = await fetch('https://flam-dev--motion-transfer-dev.modal.run/idle-motion', {
                     method: 'POST',
                     body: formData
                 });
@@ -537,7 +537,7 @@
             }
 
             try {
-                const response = await fetch(`https://ai-team-flam-dev--motion-transfer-dev.modal.run/jobs/${requestId}`);
+                const response = await fetch(`https://flam-dev--motion-transfer-dev.modal.run/jobs/${requestId}`);
                 const data = await response.json();
                 showResponse('dev-status-response', data, !response.ok);
             } catch (error) {
@@ -553,7 +553,7 @@
             }
 
             try {
-                const response = await fetch(`https://ai-team-flam-dev--motion-transfer-dev.modal.run/jobs/${requestId}/result`);
+                const response = await fetch(`https://flam-dev--motion-transfer-dev.modal.run/jobs/${requestId}/result`);
                 if (!response.ok) {
                     showResponse('dev-status-response', { error: 'Video not ready yet' }, true);
                     return;
@@ -578,7 +578,7 @@
             }
 
             try {
-                const response = await fetch(`https://ai-team-flam-dev--motion-transfer-dev.modal.run/avatar/${avatarId}/info`);
+                const response = await fetch(`https://flam-dev--motion-transfer-dev.modal.run/avatar/${avatarId}/info`);
                 const data = await response.json();
                 showResponse('dev-info-response', data, !response.ok);
             } catch (error) {
@@ -608,7 +608,7 @@
                 el.textContent = 'Uploading and processing... This may take 2-5 minutes...';
                 el.classList.add('show');
 
-                const response = await fetch('https://ai-team-flam-feat--motion-transfer-feat.modal.run/animate', {
+                const response = await fetch('https://flam-feat--motion-transfer-feat.modal.run/animate', {
                     method: 'POST',
                     body: formData
                 });
@@ -648,7 +648,7 @@
             if (video) formData.append('video_strength', video);
 
             try {
-                const response = await fetch('https://ai-team-flam-feat--motion-transfer-feat.modal.run/idle-motion', {
+                const response = await fetch('https://flam-feat--motion-transfer-feat.modal.run/idle-motion', {
                     method: 'POST',
                     body: formData
                 });
