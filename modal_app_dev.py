@@ -25,7 +25,7 @@ import modal
 
 from modal_common import (
     APP_BASENAME, MODELS_DIR,
-    build_modal_image, models_volume, mongodb_secret,
+    build_modal_image, models_volume, mongodb_secret, jobs_dict,
 )
 
 # Set API mode for this environment
@@ -39,9 +39,8 @@ GPU = "RTX-PRO-6000"    # 96 GB Blackwell (~$3.03/hr); same card used on Lightni
 CPU = 8
 MEMORY = 98304          # 96 GB RAM (weight load holds ~80 GB)
 TIMEOUT = 3600
-MIN_CONTAINERS = 1      # keep one container warm to avoid GPU provisioning delays and status tracking issues
-MAX_CONTAINERS = 1      # single GPU; in-memory job state (see modal_app_main.py note)
-SCALEDOWN_WINDOW = 3600
+MIN_CONTAINERS = 1      # keep one container warm to avoid GPU provisioning delays
+MAX_CONTAINERS = 5      # scale to 5 GPU containers; job state in modal.Dict for distributed polling
 MAX_CONCURRENT_INPUTS = 1
 
 SCRIPT_DIR = Path(__file__).parent.resolve()
