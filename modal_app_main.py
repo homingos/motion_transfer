@@ -32,7 +32,7 @@ APP_NAME = APP_BASENAME                                  # "flam-motion-transfer
 # Custom domains need a Team plan + DNS; on Starter we use the default
 # auto-generated https://<workspace>--<app>-...modal.run URL (printed on deploy).
 
-GPU = "L40S"            # 48 GB VRAM — pipeline peaks ~20 GB
+GPU = "RTX-PRO-6000"            # 48 GB VRAM — pipeline peaks ~20 GB
 CPU = 8
 MEMORY = 98304          # 96 GB RAM — weight load holds ~80 GB (40 GB would OOM)
 TIMEOUT = 3600          # 1h: first container start loads weights (~15-20 min)
