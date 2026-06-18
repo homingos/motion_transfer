@@ -11,6 +11,7 @@ API: POST /generate (multipart), then GET /jobs/{id} to poll, then GET /jobs/{id
 
 import logging
 import os
+import subprocess
 import threading
 import time
 import uuid
@@ -47,9 +48,53 @@ DEFAULT_VIDEO = _ref("default_ici.mp4")
 # Default output duration (seconds) — can be overridden by environment variable
 DEFAULT_OUTPUT_SECONDS = float(os.environ.get("TARGET_OUTPUT_SECONDS", "4.0"))
 
+def _get_4sec_loop() -> Path:
+    """Lazily create idle_avatar_4sec_loop.mp4 (2s forward + 2s reverse of idle_avatar_15_reverse.mp4)."""
+    output = REFERENCE_DIR_VOLUME / "idle_avatar_4sec_loop.mp4"
+
+    # If already created, return it
+    if output.exists():
+        return output
+
+    # Create on first access
+    import subprocess
+    source = _ref("idle_avatar_15_reverse.mp4")
+    if not source.exists():
+        logger.warning(f"Source not found: {source}, falling back to default")
+        return _ref("default_ici.mp4")
+
+    logger.info(f"Creating 4-second loop reference from {source}...")
+    tmp = output.with_suffix(".tmp.mp4")
+
+    # Extract first 2s, reverse, concatenate
+    cmd = [
+        "ffmpeg", "-y",
+        "-i", str(source),
+        "-t", "2",
+        "-filter_complex",
+        "[0:v]split=2[fwd][rev];[rev]reverse[rvid];[fwd][rvid]concat=n=2:v=1:a=0[out]",
+        "-map", "[out]",
+        "-c:v", "libx264", "-crf", "18", "-preset", "fast", "-an",
+        str(tmp),
+    ]
+
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        if result.returncode == 0:
+            tmp.replace(output)
+            logger.info(f"✅ Created 4-second loop: {output}")
+            return output
+        else:
+            logger.error(f"ffmpeg failed: {result.stderr[-200:]}")
+            return source  # Fallback to 2-second version
+    except Exception as e:
+        logger.error(f"Failed to create 4-second loop: {e}")
+        return source
+
 REFERENCE_VIDEOS = {
     "default": _ref("default_ici.mp4"),
     "female": _ref("idle_avatar_15_reverse.mp4"),
+    "4sec-loop": _get_4sec_loop(),
     "male": _ref("idle_male.mp4"),
     "trimmed": _ref("10sec_trimmed.mp4"),
 }
