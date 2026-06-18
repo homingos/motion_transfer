@@ -162,6 +162,7 @@ def run_job(request_id: str, image_path: Path, video_path: Path, prompt: str | N
                     kwargs["video_strength"] = video_strength
                 pipeline_runtime.generate(**kwargs)
                 if output_path.exists():
+                    _append_reverse(output_path)
                     _update_job(request_id, status="done", finished_at=_now(),
                          result=str(output_path.relative_to(ROOT)))
                     return
