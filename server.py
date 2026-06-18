@@ -92,6 +92,31 @@ def _update_job(request_id: str, **fields) -> None:
             JOBS[request_id].update(fields)
 
 
+def _append_reverse(video_path: Path) -> Path:
+    """Append a reversed copy of the video to itself (forward + reverse = natural loop).
+
+    Input: 5s video → Output: 10s video (forward 5s + reversed 5s).
+    Overwrites the input file in-place. Uses ffmpeg concat filter.
+    Returns the same path on success, raises on failure.
+    """
+    import subprocess
+    tmp = video_path.with_suffix(".tmp.mp4")
+    cmd = [
+        "ffmpeg", "-y",
+        "-i", str(video_path),
+        "-filter_complex",
+        "[0:v]split=2[fwd][rev];[rev]reverse[rvid];[fwd][rvid]concat=n=2:v=1:a=0[out]",
+        "-map", "[out]",
+        "-c:v", "libx264", "-crf", "18", "-preset", "fast", "-an",
+        str(tmp),
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(f"ffmpeg reverse-append failed: {result.stderr[-500:]}")
+    tmp.replace(video_path)
+    return video_path
+
+
 def _is_transient_gpu_error(error: Exception) -> bool:
     """Check if error is transient GPU-related (should retry) vs permanent (should fail)."""
     error_str = str(error).lower()
@@ -218,6 +243,8 @@ def run_idle_job(request_id: str, avatar_id: str, video_path: Path, prompt: str 
                 pipeline_runtime.generate(**kwargs)
                 if not output_path.exists():
                     raise RuntimeError("generation finished but no output file was produced")
+                # Append reversed clip so animation loops naturally (5s forward + 5s reverse)
+                _append_reverse(output_path)
                 # Upload to FLAM Resource API (GCS-backed)
                 link = integrations.flam_upload(output_path)
                 animation_key = link
@@ -294,6 +321,8 @@ def run_idle_job_with_url(request_id: str, image_url: str, video_path: Path, pro
                 pipeline_runtime.generate(**kwargs)
                 if not output_path.exists():
                     raise RuntimeError("generation finished but no output file was produced")
+                # Append reversed clip so animation loops naturally (5s forward + 5s reverse)
+                _append_reverse(output_path)
                 # Upload to FLAM Resource API (GCS-backed)
                 link = integrations.flam_upload(output_path)
                 animation_key = link
