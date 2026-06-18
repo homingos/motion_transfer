@@ -1,21 +1,24 @@
-"""MongoDB status tracking + Cloudflare R2 upload for the /idle-motion endpoint.
+"""MongoDB status tracking + FLAM Resource API for idle animation uploads.
 
 Credentials come from environment variables (Modal secrets — never hardcode):
   MONGODB_URI
-  R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET_NAME
-  R2_PUBLIC_BASE_URL  (optional — if unset, a presigned URL is used as a fallback)
+
+Uploads via FLAM Resource API (internal GCS-backed service):
+  POST /api/v1/resources -> get signed_url + resource_url
+  PUT <signed_url> -> upload file
+  Returns permanent public resource_url
 
 Mongo target: DB ``fableface`` (override MONGODB_DB), collection ``templates``
 (override MONGODB_COLLECTION). Docs are keyed by ObjectId ``_id``. We read:
-  source_assets.image_key:        the R2 key of the subject image to animate (input)
+  source_assets.image_key:        the GCS URL of the subject image to animate (input)
 and update:
   status:                "processing" | "ready" | "failed"
-  source_assets.idle_animation_key:  the R2 key of the generated idle video
+  source_assets.idle_animation_key:  the resource_url of the generated idle video
                                      (on success; written before status->ready)
   failure_reason:        the error string (on failure), else None
 (idle_vector_key is a separate field and is left untouched.)
 
-pymongo/boto3 are imported lazily so importing this module stays cheap and CUDA-free
+pymongo is imported lazily so importing this module stays cheap and CUDA-free
 (safe for the Modal memory-snapshot path).
 """
 
@@ -29,13 +32,9 @@ logger = logging.getLogger(__name__)
 
 MONGO_DB = os.environ.get("MONGODB_DB", "fableface")
 MONGO_COLLECTION = os.environ.get("MONGODB_COLLECTION", "templates")
-PRESIGN_EXPIRY_SECONDS = 7 * 24 * 3600  # 7 days (max for SigV4 presigned URLs)
 
 _mongo_lock = threading.Lock()
 _mongo_coll = None
-
-_r2_lock = threading.Lock()
-_r2 = None
 
 
 def _now() -> datetime:
@@ -143,76 +142,66 @@ def set_idle_animation_key(avatar_id: str, animation_key: str) -> None:
         logger.error("[mongo] failed to set idle_animation_key _id=%s: %r", avatar_id, e)
 
 
-def _r2_client():
-    """Cached boto3 S3 client pointed at the R2 endpoint (shared HTTP pool).
+def flam_upload(local_path: str | Path, content_type: str = "video/mp4") -> str:
+    """Upload a file to GCS via FLAM Resource API and return the permanent public resource_url.
 
-    Uses path-style addressing + SigV4 (the team convention): path-style avoids
-    bucket-name DNS issues and yields correct presigned URLs against R2.
+    The FLAM Resource API handles GCS auth server-side.
     """
-    global _r2
-    if _r2 is None:
-        with _r2_lock:
-            if _r2 is None:
-                import boto3
-                from botocore.config import Config
+    import requests
 
-                account = os.environ["R2_ACCOUNT_ID"]
-                _r2 = boto3.client(
-                    "s3",
-                    endpoint_url=f"https://{account}.r2.cloudflarestorage.com",
-                    aws_access_key_id=os.environ["R2_ACCESS_KEY_ID"],
-                    aws_secret_access_key=os.environ["R2_SECRET_ACCESS_KEY"],
-                    region_name="auto",
-                    config=Config(signature_version="s3v4", s3={"addressing_style": "path"}),
-                )
-    return _r2
+    filename = Path(local_path).name
+    api_url = os.environ.get(
+        "FLAM_RESOURCE_API_URL",
+        "https://fi.production.flamapis.com/resource-svc/api/v1/resources"
+    )
 
-
-def r2_upload(local_path: str | Path, key: str, content_type: str = "video/mp4") -> str:
-    """Upload a file to the R2 bucket under ``key`` and return a link to it.
-
-    Uses R2_PUBLIC_BASE_URL when set (permanent public URL); otherwise returns a
-    presigned URL valid for 7 days (works without public bucket access, but expires).
-    """
-    bucket = os.environ["R2_BUCKET_NAME"]
-    client = _r2_client()
-    client.upload_file(str(local_path), bucket, key, ExtraArgs={"ContentType": content_type})
-
-    base = os.environ.get("R2_PUBLIC_BASE_URL", "").rstrip("/")
-    if base:
-        url = f"{base}/{key}"
-    else:
-        url = client.generate_presigned_url(
-            "get_object", Params={"Bucket": bucket, "Key": key}, ExpiresIn=PRESIGN_EXPIRY_SECONDS
-        )
-        logger.warning("[r2] R2_PUBLIC_BASE_URL unset — returning a 7-day presigned URL for %s", key)
-    logger.info("[r2] uploaded %s", key)
-    return url
-
-
-def r2_download(key: str, local_path: str | Path) -> str:
-    """Download the R2 object at ``key`` to ``local_path`` and return the local path."""
-    bucket = os.environ["R2_BUCKET_NAME"]
-    client = _r2_client()
-    Path(local_path).parent.mkdir(parents=True, exist_ok=True)
-    client.download_file(bucket, key, str(local_path))
-    logger.info("[r2] downloaded %s", key)
-    return str(local_path)
-
-
-def r2_object_exists(key: str) -> bool:
-    """Return True if an object exists at ``key`` in the R2 bucket (HEAD, no download)."""
-    from botocore.exceptions import ClientError
-
-    bucket = os.environ["R2_BUCKET_NAME"]
-    client = _r2_client()
     try:
-        client.head_object(Bucket=bucket, Key=key)
-        return True
-    except ClientError as e:
-        if e.response.get("Error", {}).get("Code") in ("404", "NoSuchKey", "NotFound"):
-            return False
-        raise
+        # Step 1: get signed URL + resource_url
+        logger.info("[flam] requesting signed URL for file: %s", filename)
+        resp = requests.post(
+            api_url,
+            json={"file_name": filename, "type": "application/octet-stream"},
+            headers={"Content-Type": "application/json"},
+            timeout=30
+        )
+        resp.raise_for_status()
+        api_response = resp.json()
+
+        if api_response.get("status") != 200 or api_response.get("error", False):
+            error_msg = api_response.get("error", "Unknown error")
+            raise ConnectionError(f"FLAM API returned error: {error_msg}")
+
+        data = api_response.get("data", {})
+        signed_url = data.get("signed_url")
+        resource_url = data.get("resource_url")
+
+        if not signed_url or not resource_url:
+            raise ValueError("API response missing signed_url or resource_url")
+
+        logger.info("[flam] received signed URL")
+
+        # Step 2: upload file to signed URL
+        logger.info("[flam] uploading file to signed URL: %s", local_path)
+        with open(local_path, "rb") as f:
+            file_content = f.read()
+
+        upload_resp = requests.put(
+            signed_url,
+            data=file_content,
+            headers={"Content-Type": "application/octet-stream"},
+            timeout=300
+        )
+        upload_resp.raise_for_status()
+
+        logger.info("[flam] uploaded %s -> %s", filename, resource_url)
+        return resource_url
+
+    except requests.exceptions.RequestException as e:
+        logger.error("[flam] upload failed: %r", e, exc_info=True)
+        raise ConnectionError(f"FLAM upload failed: {e}") from e
+    except Exception as e:
+        logger.error("[flam] unexpected error: %r", e, exc_info=True)
+        raise ConnectionError(f"FLAM upload error: {e}") from e
 
 
 def _jobs_collection():
