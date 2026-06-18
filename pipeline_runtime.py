@@ -35,6 +35,7 @@ from ltx_core.loader.registry import StateDictRegistry
 from ltx_core.model.video_vae import TilingConfig, get_video_chunks_number
 from ltx_core.quantization import QuantizationPolicy
 from ltx_pipelines.ic_lora import ICLoraPipeline
+import ltx_pipelines.ic_lora as _ic_lora
 from ltx_pipelines.utils import timing as T
 from ltx_pipelines.utils.args import ImageConditioningInput, resolve_path
 from ltx_pipelines.utils.media_io import encode_video
@@ -90,6 +91,22 @@ _PROMPT_CACHE: dict[str, object] = {}
 # Resident transformer cache: "s1"/"s2" -> live X0Model on GPU VRAM
 # Populated during prewarm. Eliminates ~12-13s of CPU->GPU transfer per request.
 _RESIDENT_TRANSFORMERS: dict[str, object] = {}
+
+
+# --- Hardened prompt cache: always active, survives skipped prewarm ---
+def _encode_cached_prompt(prompts, model_ledger, **kw):
+    """Cached wrapper for encode_prompts. Hits cache on matching prompts."""
+    from ltx_pipelines.utils.helpers import encode_prompts as _orig_encode
+    if len(prompts) == 1 and not kw.get("enhance_first_prompt") and prompts[0] in _PROMPT_CACHE:
+        logger.info("[cache] encode_prompts HIT")
+        return [_PROMPT_CACHE[prompts[0]]]
+    results = _orig_encode(prompts, model_ledger, **kw)
+    if len(prompts) == 1 and not kw.get("enhance_first_prompt"):
+        _PROMPT_CACHE[prompts[0]] = results[0]
+        logger.info("[cache] encode_prompts: cached prompt (%d chars)", len(prompts[0]))
+    return results
+
+_ic_lora.encode_prompts = _encode_cached_prompt
 
 
 def _build_pipeline() -> ICLoraPipeline:
@@ -180,25 +197,10 @@ def prewarm_weights() -> None:
     t0 = time.perf_counter()
     logger.info("[runtime] pre-warming (optimised: skip_stage_2, short clip, cache install)...")
 
-    import ltx_pipelines.ic_lora as _ic_lora
-    from ltx_pipelines.utils.helpers import encode_prompts as _orig_encode
-
     with _LOCK:
         pipeline = _build_pipeline()
 
-    # --- Patch 1: caching shim for encode_prompts ---
-    def _encode_cached(prompts, model_ledger, **kw):
-        if len(prompts) == 1 and not kw.get("enhance_first_prompt") and prompts[0] in _PROMPT_CACHE:
-            logger.info("[cache] encode_prompts HIT")
-            return [_PROMPT_CACHE[prompts[0]]]
-        results = _orig_encode(prompts, model_ledger, **kw)
-        if len(prompts) == 1 and not kw.get("enhance_first_prompt"):
-            _PROMPT_CACHE[prompts[0]] = results[0]
-            logger.info("[cache] encode_prompts: cached prompt (%d chars)", len(prompts[0]))
-        return results
-    _ic_lora.encode_prompts = _encode_cached
-
-    # --- Patch 2: saving shim for stage_1 transformer ---
+    # --- Patch: saving shim for stage_1 transformer ---
     _s1_ledger = pipeline.stage_1_model_ledger
     _orig_s1_transformer = _s1_ledger.__class__.transformer
 
@@ -226,6 +228,12 @@ def prewarm_weights() -> None:
         logger.info("[cache] building resident s2 transformer...")
         _RESIDENT_TRANSFORMERS["s2"] = pipeline.stage_2_model_ledger.transformer()
         logger.info("[cache] s2 transformer resident in %.1fs", time.perf_counter() - t2)
+
+        # --- Cache video encoder ---
+        logger.info("[cache] building resident video encoder...")
+        _RESIDENT_TRANSFORMERS["video_encoder"] = pipeline.stage_1_model_ledger.video_encoder()
+        pipeline.stage_1_model_ledger.video_encoder = lambda: _RESIDENT_TRANSFORMERS["video_encoder"]
+        logger.info("[cache] video encoder resident in GPU cache")
 
         # --- Rebind both ledgers to return cached instances ---
         pipeline.stage_1_model_ledger.transformer = lambda: _RESIDENT_TRANSFORMERS["s1"]

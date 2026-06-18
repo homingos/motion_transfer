@@ -38,8 +38,8 @@ CPU = 8
 MEMORY = 98304          # 96 GB RAM
 TIMEOUT = 3600
 MIN_CONTAINERS = 1      # keep one container warm (same as main/dev)
-MAX_CONTAINERS = 1
-SCALEDOWN_WINDOW = 120
+MAX_CONTAINERS = 20     # scale to 20 GPU containers
+SCALEDOWN_WINDOW = 300   # 5 minutes — continuous traffic pattern, scale down quickly
 MAX_CONCURRENT_INPUTS = 1
 
 SCRIPT_DIR = Path(__file__).parent.resolve()

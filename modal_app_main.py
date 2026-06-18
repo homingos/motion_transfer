@@ -37,8 +37,8 @@ CPU = 8
 MEMORY = 98304          # 96 GB RAM — weight load holds ~80 GB (40 GB would OOM)
 TIMEOUT = 3600          # 1h: first container start loads weights (~15-20 min)
 MIN_CONTAINERS = 1      # keep one container warm to avoid GPU provisioning delays
-MAX_CONTAINERS = 5      # scale to 5 GPU containers; job state in modal.Dict for distributed polling
-SCALEDOWN_WINDOW = 1800  # keep warm 30 min (matches GPU_WAIT_DEADLINE)
+MAX_CONTAINERS = 20     # scale to 20 GPU containers; job state in modal.Dict for distributed polling
+SCALEDOWN_WINDOW = 300   # 5 minutes — continuous traffic pattern, scale down quickly
 MAX_CONCURRENT_INPUTS = 1  # the pipeline pins the whole GPU; one job per container at a time
 
 SCRIPT_DIR = Path(__file__).parent.resolve()

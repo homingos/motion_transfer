@@ -39,10 +39,10 @@ GPU = "RTX-PRO-6000"    # 96 GB Blackwell (~$3.03/hr); same card used on Lightni
 CPU = 8
 MEMORY = 98304          # 96 GB RAM (weight load holds ~80 GB)
 TIMEOUT = 3600
-MIN_CONTAINERS = 1      # keep one container warm to avoid GPU provisioning delays
-MAX_CONTAINERS = 5      # scale to 5 GPU containers; job state in modal.Dict for distributed polling
-SCALEDOWN_WINDOW = 3600  # keep warm 1 hour
-MAX_CONCURRENT_INPUTS = 1
+MIN_CONTAINERS = 0      # scale to zero — $0 idle (cold load + preemption risk on first request)
+MAX_CONTAINERS = 20     # scale to 20 GPU containers; job state in modal.Dict for distributed polling
+SCALEDOWN_WINDOW = 300   # 5 minutes — continuous traffic pattern, scale down quickly
+MAX_CONCURRENT_INPUTS = 3
 
 SCRIPT_DIR = Path(__file__).parent.resolve()
 image = build_modal_image(SCRIPT_DIR)
