@@ -7,3 +7,9 @@
 *.jpeg filter=lfs diff=lfs merge=lfs -text
 *.jpg filter=lfs diff=lfs merge=lfs -text
 *.webp filter=lfs diff=lfs merge=lfs -text
+# Reference assets shipped with the repo — stored as regular git objects, not LFS
+assets/default.mp4 !filter !diff !merge -text
+assets/idle_male.mp4 !filter !diff !merge -text
+assets/idle_avatar_15_reverse.mp4 !filter !diff !merge -text
+assets/motion_transfer_f3f809816351.mp4 !filter !diff !merge -text
+assets/salman_khan_static_4sec.mp4 !filter !diff !merge -text

@@ -32,16 +32,26 @@ ROOT = Path(__file__).resolve().parent
 UPLOADS = ROOT / "uploads"
 OUTPUTS = ROOT / "outputs"
 STATIC = ROOT / "static"
-DEFAULT_VIDEO = ROOT / "assets" / "default.mp4"
+MOTION_TRANSFER_MODELS_DIR = Path(os.environ.get("LTX_MODELS_DIR", ROOT / "models"))
+REFERENCE_DIR_VOLUME = MOTION_TRANSFER_MODELS_DIR / "reference"  # fallback when assets not packaged (CI/CD)
+
+def _ref(name: str) -> Path:
+    """Return reference video path — assets dir first, volume fallback second."""
+    asset = ROOT / "assets" / name
+    if asset.exists():
+        return asset
+    return REFERENCE_DIR_VOLUME / name
+
+DEFAULT_VIDEO = _ref("default_ici.mp4")
 
 # Default output duration (seconds) — can be overridden by environment variable
 DEFAULT_OUTPUT_SECONDS = float(os.environ.get("TARGET_OUTPUT_SECONDS", "4.0"))
 
 REFERENCE_VIDEOS = {
-    "default": DEFAULT_VIDEO,  # default reference video
-    "female": ROOT / "assets" / "idle_avatar_15_reverse.mp4",
-    "male": ROOT / "assets" / "idle_male.mp4",
-    "trimmed": ROOT / "assets" / "10sec_trimmed.mp4",
+    "default": _ref("default_ici.mp4"),
+    "female": _ref("idle_avatar_15_reverse.mp4"),
+    "male": _ref("idle_male.mp4"),
+    "trimmed": _ref("10sec_trimmed.mp4"),
 }
 
 UPLOADS.mkdir(parents=True, exist_ok=True)

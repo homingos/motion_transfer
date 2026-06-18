@@ -24,9 +24,8 @@ tmp
 models/
 models
 outputs/
-
-# Local-only operational doc
-HOSTING.md
+uploads/
+uploads
 
 # Local venv symlink and scratch logs
 ltx
@@ -38,7 +37,7 @@ ltx
 *.safetensors
 *.sft
 
-# Media files
+# Media files — all kept out of git, reference videos live in Modal volume
 *.gif
 *.heic
 *.heif
@@ -52,7 +51,14 @@ ltx
 *.wav
 *.webp
 
-# Exceptions: ship the default reference video that main.py uses
-!assets/idle_avatar_15_reverse.mp4
+# Scratch / local-only docs
 r2_check
-uploads
+EYEBROW_FIX_TEST.md
+INPUT_IMAGE_GUIDE.md
+LORA_STRENGTH_FIX.md
+MOTION_TRANSFER_INVESTIGATION.md
+POSTMAN_TESTING_GUIDE.md
+TEST_PLAN_CRF_SLIDERS.md
+create_static_reference.py
+generated_motion_transfer.mp4
+test_loop_output.mp4
