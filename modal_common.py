@@ -43,6 +43,10 @@ models_volume = modal.Volume.from_name(MODELS_VOLUME_NAME, create_if_missing=Tru
 # FLAM Resource API (GCS upload) uses no secrets — it's an internal service.
 mongodb_secret = modal.Secret.from_name("mongodb-secret")  # MONGODB_URI
 
+# Shared job state dictionary for distributed polling across multiple containers.
+# Allows any container to serve GET /jobs/{id} for any job, enabling MAX_CONTAINERS > 1.
+jobs_dict = modal.Dict.from_name("motion-transfer-jobs", create_if_missing=True)
+
 
 def build_modal_image(script_dir: Path) -> modal.Image:
     """Build the Modal image with this project's dependencies and code."""

@@ -21,7 +21,7 @@ import modal
 
 from modal_common import (
     APP_BASENAME, MODELS_DIR,
-    build_modal_image, models_volume, mongodb_secret,
+    build_modal_image, models_volume, mongodb_secret, jobs_dict,
 )
 
 # =============================================================================
@@ -36,15 +36,9 @@ GPU = "RTX-PRO-6000"            # 48 GB VRAM — pipeline peaks ~20 GB
 CPU = 8
 MEMORY = 98304          # 96 GB RAM — weight load holds ~80 GB (40 GB would OOM)
 TIMEOUT = 3600          # 1h: first container start loads weights (~15-20 min)
-MIN_CONTAINERS = 1      # keep one container warm to avoid GPU provisioning delays and status tracking issues
-MAX_CONTAINERS = 1      # single GPU, serialized; in-memory job state (see note below)
-SCALEDOWN_WINDOW = 300  # keep warm 5 min after the last request
-MAX_CONCURRENT_INPUTS = 1  # the pipeline pins the whole GPU; one job at a time
-
-# NOTE on scaling: server.py keeps job state in an in-process dict, so polling
-# /jobs/{id} must hit the same container that created the job. That's why
-# MAX_CONTAINERS=1. To scale horizontally, move JOBS into a modal.Dict so any
-# container can serve a poll, then raise MAX_CONTAINERS.
+MIN_CONTAINERS = 1      # keep one container warm to avoid GPU provisioning delays
+MAX_CONTAINERS = 5      # scale to 5 GPU containers; job state in modal.Dict for distributed polling
+MAX_CONCURRENT_INPUTS = 1  # the pipeline pins the whole GPU; one job per container at a time
 
 SCRIPT_DIR = Path(__file__).parent.resolve()
 image = build_modal_image(SCRIPT_DIR)

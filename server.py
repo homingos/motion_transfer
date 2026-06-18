@@ -27,6 +27,11 @@ from fastapi.staticfiles import StaticFiles
 import pipeline_runtime
 import integrations
 
+try:
+    from modal_common import jobs_dict
+except ImportError:
+    jobs_dict = {}  # fallback for local dev (not Modal)
+
 logger = logging.getLogger(__name__)
 
 ROOT = Path(__file__).resolve().parent
@@ -130,10 +135,12 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(title="LTX-2 Motion Transfer", lifespan=_lifespan)
 
-# In-memory job registry for this server instance.
-JOBS: dict[str, dict] = {}
+# Job registry: use modal.Dict if available (distributed across containers),
+# else fall back to in-memory dict for local dev.
+JOBS = jobs_dict if isinstance(jobs_dict, dict) and jobs_dict is not None else {}
 _JOB_LOCK = threading.Lock()
-# Serialize generations: the pipeline pins the whole GPU, so we run one at a time.
+# Per-container GPU lock: serialize generations within this container.
+# Multiple containers can each run one job in parallel via _GPU_LOCK per-container.
 _GPU_LOCK = threading.Lock()
 
 
@@ -143,8 +150,10 @@ def _now() -> str:
 
 def _update_job(request_id: str, **fields) -> None:
     with _JOB_LOCK:
-        if request_id in JOBS:
-            JOBS[request_id].update(fields)
+        current = JOBS.get(request_id) if isinstance(JOBS, dict) else JOBS.get(request_id)
+        if current is not None:
+            updated = {**current, **fields}
+            JOBS[request_id] = updated
 
 
 def _append_reverse(video_path: Path) -> Path:
@@ -740,9 +749,15 @@ def get_job(request_id: str):
 def get_result(request_id: str):
     if request_id not in JOBS:
         raise HTTPException(404, "request not found")
-    if JOBS[request_id].get("status") != "done":
-        raise HTTPException(409, f"job not done (status={JOBS[request_id].get('status')})")
-    return FileResponse(ROOT / JOBS[request_id]["result"], media_type="video/mp4", filename=f"motion_transfer_{request_id}.mp4")
+    job = JOBS[request_id]
+    if job.get("status") != "done":
+        raise HTTPException(409, f"job not done (status={job.get('status')})")
+    # If job was uploaded to GCS (idle jobs), redirect to the permanent URL
+    if job.get("link"):
+        from fastapi.responses import RedirectResponse
+        return RedirectResponse(url=job["link"])
+    # Otherwise serve local file (from /generate endpoint, plain file output)
+    return FileResponse(ROOT / job["result"], media_type="video/mp4", filename=f"motion_transfer_{request_id}.mp4")
 
 
 @app.get("/reference/{name}")
