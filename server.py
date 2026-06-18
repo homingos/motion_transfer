@@ -135,10 +135,6 @@ def run_job(request_id: str, image_path: Path, video_path: Path, prompt: str | N
                     kwargs["lora_strength"] = lora_strength
                 if video_strength is not None:
                     kwargs["video_strength"] = video_strength
-                if crf is not None:
-                    kwargs["crf"] = crf
-                if target_output_seconds is not None:
-                    kwargs["target_output_seconds"] = target_output_seconds
                 pipeline_runtime.generate(**kwargs)
                 if output_path.exists():
                     _update_job(request_id, status="done", finished_at=_now(),
@@ -219,10 +215,6 @@ def run_idle_job(request_id: str, avatar_id: str, video_path: Path, prompt: str 
                     kwargs["lora_strength"] = lora_strength
                 if video_strength is not None:
                     kwargs["video_strength"] = video_strength
-                if crf is not None:
-                    kwargs["crf"] = crf
-                if target_output_seconds is not None:
-                    kwargs["target_output_seconds"] = target_output_seconds
                 pipeline_runtime.generate(**kwargs)
                 if not output_path.exists():
                     raise RuntimeError("generation finished but no output file was produced")
@@ -299,10 +291,6 @@ def run_idle_job_with_url(request_id: str, image_url: str, video_path: Path, pro
                     kwargs["lora_strength"] = lora_strength
                 if video_strength is not None:
                     kwargs["video_strength"] = video_strength
-                if crf is not None:
-                    kwargs["crf"] = crf
-                if target_output_seconds is not None:
-                    kwargs["target_output_seconds"] = target_output_seconds
                 pipeline_runtime.generate(**kwargs)
                 if not output_path.exists():
                     raise RuntimeError("generation finished but no output file was produced")
