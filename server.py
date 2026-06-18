@@ -688,6 +688,15 @@ def get_result(request_id: str):
     return FileResponse(ROOT / JOBS[request_id]["result"], media_type="video/mp4", filename=f"motion_transfer_{request_id}.mp4")
 
 
+@app.get("/reference/{name}")
+async def reference_video(name: str):
+    """Serve a reference video from assets or volume fallback."""
+    path = _ref(name)
+    if not path.exists():
+        raise HTTPException(404, f"reference video '{name}' not found")
+    return FileResponse(str(path), media_type="video/mp4")
+
+
 app.mount("/static", StaticFiles(directory=str(STATIC)), name="static")
 
 
