@@ -30,8 +30,8 @@ from modal_common import (
 
 # Set API mode for this environment
 os.environ["API_MODE"] = "r2_only"
-# Set default output duration to match reference video length
-os.environ["TARGET_OUTPUT_SECONDS"] = "7.0"
+# Set default output duration to 2 seconds (will be reversed → 4 seconds total looped)
+os.environ["TARGET_OUTPUT_SECONDS"] = "2.0"
 
 APP_NAME = APP_BASENAME          # same name; isolated by the `dev` environment
 
