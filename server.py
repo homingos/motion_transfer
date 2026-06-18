@@ -369,6 +369,7 @@ def run_idle_job_with_url(request_id: str, image_url: str, video_path: Path, pro
                     "output_path": str(output_path),
                     "video_path": str(video_path),
                     "prompt": prompt or None,
+                    "output_seconds": target_output_seconds or DEFAULT_OUTPUT_SECONDS,
                 }
                 if lora_strength is not None:
                     kwargs["lora_strength"] = lora_strength
