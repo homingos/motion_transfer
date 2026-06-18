@@ -62,3 +62,6 @@ TEST_PLAN_CRF_SLIDERS.md
 create_static_reference.py
 generated_motion_transfer.mp4
 test_loop_output.mp4
+
+# Environment variables with credentials
+.env
