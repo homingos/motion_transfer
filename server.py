@@ -205,11 +205,15 @@ def run_job(request_id: str, image_path: Path, video_path: Path, prompt: str | N
             _update_job(request_id, status="running", started_at=_now())
             output_path = OUTPUTS / f"api_{request_id}.mp4"
             try:
+                frame_rate = 25.0
+                num_frames = int(round((target_output_seconds or DEFAULT_OUTPUT_SECONDS) * frame_rate))
                 kwargs = {
                     "image_path": str(image_path),
                     "output_path": str(output_path),
                     "video_path": str(video_path),
                     "prompt": prompt or None,
+                    "num_frames": num_frames,
+                    "frame_rate": frame_rate,
                 }
                 if lora_strength is not None:
                     kwargs["lora_strength"] = lora_strength
@@ -286,11 +290,15 @@ def run_idle_job(request_id: str, avatar_id: str, video_path: Path, prompt: str 
             _update_job(request_id, status="running", started_at=_now())
             output_path = OUTPUTS / f"idle_{avatar_id}_{request_id}.mp4"
             try:
+                frame_rate = 25.0
+                num_frames = int(round((target_output_seconds or DEFAULT_OUTPUT_SECONDS) * frame_rate))
                 kwargs = {
                     "image_path": str(image_path),
                     "output_path": str(output_path),
                     "video_path": str(video_path),
                     "prompt": prompt or None,
+                    "num_frames": num_frames,
+                    "frame_rate": frame_rate,
                 }
                 if lora_strength is not None:
                     kwargs["lora_strength"] = lora_strength
@@ -364,12 +372,15 @@ def run_idle_job_with_url(request_id: str, image_url: str, video_path: Path, pro
             _update_job(request_id, status="running", started_at=_now())
             output_path = OUTPUTS / f"idle_{request_id}.mp4"
             try:
+                frame_rate = 25.0
+                num_frames = int(round((target_output_seconds or DEFAULT_OUTPUT_SECONDS) * frame_rate))
                 kwargs = {
                     "image_path": str(image_path),
                     "output_path": str(output_path),
                     "video_path": str(video_path),
                     "prompt": prompt or None,
-                    "output_seconds": target_output_seconds or DEFAULT_OUTPUT_SECONDS,
+                    "num_frames": num_frames,
+                    "frame_rate": frame_rate,
                 }
                 if lora_strength is not None:
                     kwargs["lora_strength"] = lora_strength
@@ -378,7 +389,7 @@ def run_idle_job_with_url(request_id: str, image_url: str, video_path: Path, pro
                 pipeline_runtime.generate(**kwargs)
                 if not output_path.exists():
                     raise RuntimeError("generation finished but no output file was produced")
-                # Append reversed clip so animation loops naturally (5s forward + 5s reverse)
+                # Append reversed clip so animation loops naturally (2s forward + 2s reverse on feat)
                 _append_reverse(output_path)
                 # Upload to FLAM Resource API (GCS-backed)
                 link = integrations.flam_upload(output_path)
