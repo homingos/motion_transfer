@@ -43,7 +43,7 @@ def _ref(name: str) -> Path:
         return asset
     return REFERENCE_DIR_VOLUME / name
 
-DEFAULT_VIDEO = _ref("default_ici.mp4")
+DEFAULT_VIDEO = _get_4sec_loop()
 
 # Default output duration (seconds) — can be overridden by environment variable
 DEFAULT_OUTPUT_SECONDS = float(os.environ.get("TARGET_OUTPUT_SECONDS", "4.0"))
@@ -92,7 +92,7 @@ def _get_4sec_loop() -> Path:
         return source
 
 REFERENCE_VIDEOS = {
-    "default": _ref("default_ici.mp4"),
+    "default": _get_4sec_loop(),
     "female": _ref("idle_avatar_15_reverse.mp4"),
     "4sec-loop": _get_4sec_loop(),
     "male": _ref("idle_male.mp4"),
