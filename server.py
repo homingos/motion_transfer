@@ -535,12 +535,13 @@ async def idle_motion(
 
     if gender == "male":
         reference = "male"
+        output_seconds = 1.5  # 1.5s forward + 1.5s reverse = 3s total
     else:
         reference = "female"
+        output_seconds = DEFAULT_OUTPUT_SECONDS  # 2.0s forward + 2.0s reverse = 4s total
 
     request_id = uuid.uuid4().hex[:12]
     video_path = REFERENCE_VIDEOS[reference]
-    output_seconds = DEFAULT_OUTPUT_SECONDS
 
     job_data = {
         "status": "pending",
