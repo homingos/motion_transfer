@@ -54,13 +54,10 @@ def _get_kling_6sec_loop() -> Path:
         return output
 
     import subprocess
-    # Try local assets first, then fallback
-    source = ROOT / "assets" / "kling_20260617_VIDEO_Listening__5171_0.mp4"
+    # Kling video is stored in the Modal volume's reference directory
+    source = REFERENCE_DIR_VOLUME / "kling_20260617_VIDEO_Listening__5171_0.mp4"
     if not source.exists():
-        # Fallback to looking in REFERENCE_DIR_VOLUME if local doesn't exist
-        source = REFERENCE_DIR_VOLUME / "kling_20260617_VIDEO_Listening__5171_0.mp4"
-    if not source.exists():
-        logger.warning(f"Source not found, falling back to default_ici")
+        logger.warning(f"Kling video not found at {source}, falling back to default_ici")
         return _ref("default_ici.mp4")
 
     logger.info(f"Creating 6-second loop from kling video (first 3s + reversed)...")
