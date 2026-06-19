@@ -89,10 +89,10 @@ def _get_4sec_loop() -> Path:
         logger.error(f"Failed to create 4-second loop: {e}")
         return source
 
-DEFAULT_VIDEO = _get_4sec_loop()
+DEFAULT_VIDEO = _ref("default_ici.mp4")
 
 REFERENCE_VIDEOS = {
-    "default": _get_4sec_loop(),
+    "default": _ref("default_ici.mp4"),
     "female": _ref("idle_avatar_15_reverse.mp4"),
     "4sec-loop": _get_4sec_loop(),
     "male": _ref("idle_male.mp4"),
