@@ -142,7 +142,7 @@ DEFAULT_VIDEO = _ref("default_1.mp4")
 REFERENCE_VIDEOS = {
     "default": _ref("default_1.mp4"),
     "female": _ref("default_1.mp4"),
-    "male": _ref("default.mp4"),
+    "male": _ref("male.mp4"),
     "4sec-loop": _get_4sec_loop(),
     "trimmed": _ref("10sec_trimmed.mp4"),
 }
