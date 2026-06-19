@@ -48,10 +48,50 @@ def _ref(name: str) -> Path:
         return asset
     return REFERENCE_DIR_VOLUME / name
 
-DEFAULT_VIDEO = _ref("default_ici.mp4")
-
 # Default output duration (seconds) — can be overridden by environment variable
 DEFAULT_OUTPUT_SECONDS = float(os.environ.get("TARGET_OUTPUT_SECONDS", "4.0"))
+
+def _get_kling_6sec_loop() -> Path:
+    """Create 6-second loop from kling video: first 3s + reversed 3s."""
+    output = REFERENCE_DIR_VOLUME / "kling_6sec_loop.mp4"
+
+    if output.exists():
+        return output
+
+    import subprocess
+    # Kling video is stored in the Modal volume's reference directory
+    source = REFERENCE_DIR_VOLUME / "kling_20260617_VIDEO_Listening__5171_0.mp4"
+    if not source.exists():
+        logger.warning(f"Kling video not found at {source}, falling back to default_ici")
+        return _ref("default_ici.mp4")
+
+    logger.info(f"Creating 6-second loop from kling video (first 3s + reversed)...")
+    tmp = output.with_suffix(".tmp.mp4")
+
+    # Extract first 3s, reverse, concatenate
+    cmd = [
+        "ffmpeg", "-y",
+        "-i", str(source),
+        "-t", "3",
+        "-filter_complex",
+        "[0:v]split=2[fwd][rev];[rev]reverse[rvid];[fwd][rvid]concat=n=2:v=1:a=0[out]",
+        "-map", "[out]",
+        "-c:v", "libx264", "-crf", "18", "-preset", "fast", "-an",
+        str(tmp),
+    ]
+
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        if result.returncode == 0:
+            tmp.replace(output)
+            logger.info(f"✅ Created 6-second kling loop: {output}")
+            return output
+        else:
+            logger.error(f"ffmpeg failed: {result.stderr[-200:]}")
+            return source
+    except Exception as e:
+        logger.error(f"Failed to create kling 6-second loop: {e}")
+        return source
 
 def _get_4sec_loop() -> Path:
     """Lazily create idle_avatar_4sec_loop.mp4 (2s forward + 2s reverse of idle_avatar_15_reverse.mp4)."""
@@ -96,8 +136,10 @@ def _get_4sec_loop() -> Path:
         logger.error(f"Failed to create 4-second loop: {e}")
         return source
 
+DEFAULT_VIDEO = _ref("default_1.mp4")
+
 REFERENCE_VIDEOS = {
-    "default": _ref("default_ici.mp4"),
+    "default": _ref("default_1.mp4"),
     "female": _ref("idle_avatar_15_reverse.mp4"),
     "4sec-loop": _get_4sec_loop(),
     "male": _ref("idle_male.mp4"),
