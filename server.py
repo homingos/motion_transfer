@@ -141,9 +141,9 @@ DEFAULT_VIDEO = _ref("default_1.mp4")
 
 REFERENCE_VIDEOS = {
     "default": _ref("default_1.mp4"),
-    "female": _ref("idle_avatar_15_reverse.mp4"),
+    "female": _ref("default_1.mp4"),
+    "male": _ref("default.mp4"),
     "4sec-loop": _get_4sec_loop(),
-    "male": _ref("idle_male.mp4"),
     "trimmed": _ref("10sec_trimmed.mp4"),
 }
 
@@ -520,27 +520,27 @@ async def generate(
 
 @app.post("/idle-motion")
 async def idle_motion(
-    image_url: str = Form(..., description="GCS image URL — direct URL to the image to process."),
-    lora_strength: float | None = Form(None, description="LoRA strength (optional, 0.0-1.0; default 0.8)"),
-    video_strength: float | None = Form(None, description="Video conditioning strength (optional, 0.0-1.0; default 0.95)"),
-    crf: int | None = Form(None, description="Image CRF compression (optional, 18-28; default 18; higher = more smoothing)"),
-    target_output_seconds: float | None = Form(None, description="Target output duration in seconds (optional, default 4.0)"),
-    reference: str = Form("default", description="Preset reference video: 'default' (female), 'female', or 'male'"),
+    image_url: str = Form(..., description="GCS image URL of the avatar image."),
+    gender: str | None = Form(None, description="'male' or 'female'. Defaults to female if not provided."),
 ):
     """Generate an idle-motion video from a GCS image URL.
 
     Async: returns a request_id immediately. The image is downloaded from the provided GCS URL;
-    generation uses the specified reference clip (default: female). Status is tracked in memory;
-    on success the generated idle video is uploaded to R2.
+    generation uses the reference motion matching the specified gender (default: female).
+    Status is tracked; on success the generated idle video is uploaded to GCS.
     """
     image_url = image_url.strip()
     if not image_url:
         raise HTTPException(400, "image_url is required")
-    if reference not in REFERENCE_VIDEOS:
-        raise HTTPException(400, f"invalid reference: {reference}; must be one of {list(REFERENCE_VIDEOS.keys())}")
+
+    if gender == "male":
+        reference = "male"
+    else:
+        reference = "female"
 
     request_id = uuid.uuid4().hex[:12]
     video_path = REFERENCE_VIDEOS[reference]
+    output_seconds = DEFAULT_OUTPUT_SECONDS
 
     job_data = {
         "status": "pending",
@@ -550,9 +550,7 @@ async def idle_motion(
     }
     await JOBS.put.aio(request_id, job_data)
 
-    # Use environment default if not provided
-    output_seconds = target_output_seconds if target_output_seconds is not None else DEFAULT_OUTPUT_SECONDS
-    threading.Thread(target=run_idle_job_with_url, args=(request_id, image_url, video_path, None, lora_strength, video_strength, crf, output_seconds),
+    threading.Thread(target=run_idle_job_with_url, args=(request_id, image_url, video_path, None, None, None, None, output_seconds),
                      daemon=True).start()
     return {"request_id": request_id, **job_data}
 
