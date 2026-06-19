@@ -205,7 +205,7 @@ def run_job(request_id: str, image_path: Path, video_path: Path, prompt: str | N
             _update_job(request_id, status="running", started_at=_now())
             output_path = OUTPUTS / f"api_{request_id}.mp4"
             try:
-                frame_rate = 12.5
+                frame_rate = 25.0
                 num_frames = int(round((target_output_seconds or DEFAULT_OUTPUT_SECONDS) * frame_rate))
                 kwargs = {
                     "image_path": str(image_path),
@@ -290,7 +290,7 @@ def run_idle_job(request_id: str, avatar_id: str, video_path: Path, prompt: str 
             _update_job(request_id, status="running", started_at=_now())
             output_path = OUTPUTS / f"idle_{avatar_id}_{request_id}.mp4"
             try:
-                frame_rate = 12.5
+                frame_rate = 25.0
                 num_frames = int(round((target_output_seconds or DEFAULT_OUTPUT_SECONDS) * frame_rate))
                 kwargs = {
                     "image_path": str(image_path),
@@ -372,7 +372,7 @@ def run_idle_job_with_url(request_id: str, image_url: str, video_path: Path, pro
             _update_job(request_id, status="running", started_at=_now())
             output_path = OUTPUTS / f"idle_{request_id}.mp4"
             try:
-                frame_rate = 12.5
+                frame_rate = 25.0
                 num_frames = int(round((target_output_seconds or DEFAULT_OUTPUT_SECONDS) * frame_rate))
                 kwargs = {
                     "image_path": str(image_path),
