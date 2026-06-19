@@ -179,7 +179,7 @@ app = FastAPI(title="LTX-2 Motion Transfer", lifespan=_lifespan)
 
 # Job registry: use modal.Dict if available (distributed across containers),
 # else fall back to in-memory dict for local dev.
-JOBS = jobs_dict if isinstance(jobs_dict, dict) and jobs_dict is not None else {}
+JOBS = jobs_dict if jobs_dict is not None else {}
 _JOB_LOCK = threading.Lock()
 # Per-container GPU lock: serialize generations within this container.
 # Multiple containers can each run one job in parallel via _GPU_LOCK per-container.
