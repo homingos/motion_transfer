@@ -9,6 +9,7 @@ UI:  open http://localhost:8000/ in a browser.
 API: POST /generate (multipart), then GET /jobs/{id} to poll, then GET /jobs/{id}/result for the mp4.
 """
 
+import asyncio
 import logging
 import os
 import subprocess
@@ -501,20 +502,20 @@ async def generate(
         video_path = REFERENCE_VIDEOS[reference]
         used_default = True
 
-    with _JOB_LOCK:
-        JOBS[request_id] = {
-            "status": "pending",
-            "image": image.filename,
-            "video": video_path.name,
-            "used_default_video": used_default,
-            "prompt": prompt,
-            "submitted_at": _now(),
-        }
+    job_data = {
+        "status": "pending",
+        "image": image.filename,
+        "video": video_path.name,
+        "used_default_video": used_default,
+        "prompt": prompt,
+        "submitted_at": _now(),
+    }
+    await JOBS.put.aio(request_id, job_data)
 
     # Use environment default if not provided
     output_seconds = target_output_seconds if target_output_seconds is not None else DEFAULT_OUTPUT_SECONDS
     threading.Thread(target=run_job, args=(request_id, image_path, video_path, prompt, lora_strength, video_strength, crf, output_seconds), daemon=True).start()
-    return {"request_id": request_id, **JOBS[request_id]}
+    return {"request_id": request_id, **job_data}
 
 
 @app.post("/idle-motion")
@@ -541,19 +542,19 @@ async def idle_motion(
     request_id = uuid.uuid4().hex[:12]
     video_path = REFERENCE_VIDEOS[reference]
 
-    with _JOB_LOCK:
-        JOBS[request_id] = {
-            "status": "pending",
-            "image_url": image_url,
-            "video": video_path.name,
-            "submitted_at": _now(),
-        }
+    job_data = {
+        "status": "pending",
+        "image_url": image_url,
+        "video": video_path.name,
+        "submitted_at": _now(),
+    }
+    await JOBS.put.aio(request_id, job_data)
 
     # Use environment default if not provided
     output_seconds = target_output_seconds if target_output_seconds is not None else DEFAULT_OUTPUT_SECONDS
     threading.Thread(target=run_idle_job_with_url, args=(request_id, image_url, video_path, None, lora_strength, video_strength, crf, output_seconds),
                      daemon=True).start()
-    return {"request_id": request_id, **JOBS[request_id]}
+    return {"request_id": request_id, **job_data}
 
 
 @app.get("/avatar/{avatar_id}/info")
@@ -762,13 +763,13 @@ async def animate(
         request_id = uuid.uuid4().hex[:12]
         video_path = REFERENCE_VIDEOS[reference]
 
-        with _JOB_LOCK:
-            JOBS[request_id] = {
-                "status": "pending",
-                "avatar_id": avatar_id,
-                "video": video_path.name,
-                "submitted_at": _now(),
-            }
+        job_data = {
+            "status": "pending",
+            "avatar_id": avatar_id,
+            "video": video_path.name,
+            "submitted_at": _now(),
+        }
+        await JOBS.put.aio(request_id, job_data)
 
         # Use environment default if not provided
         output_seconds = target_output_seconds if target_output_seconds is not None else DEFAULT_OUTPUT_SECONDS
@@ -777,7 +778,7 @@ async def animate(
             args=(request_id, avatar_id, video_path, None, lora_strength, video_strength, crf, output_seconds),
             daemon=True,
         ).start()
-        return {"request_id": request_id, **JOBS[request_id]}
+        return {"request_id": request_id, **job_data}
 
 
 @app.get("/jobs/{request_id}")

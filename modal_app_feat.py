@@ -28,8 +28,8 @@ from modal_common import (
 
 # Set API mode for this environment
 os.environ["API_MODE"] = "full"
-# Set default output duration to 3 seconds (will be reversed → 6 seconds total looped)
-os.environ["TARGET_OUTPUT_SECONDS"] = "3.0"
+# Set default output duration to 2 seconds (will be reversed → 4 seconds total looped)
+os.environ["TARGET_OUTPUT_SECONDS"] = "2.0"
 
 APP_NAME = APP_BASENAME + "-feat"   # "flam-motion-transfer-feat" — distinct from dev/main
 

@@ -52,7 +52,7 @@ ASSETS = ROOT / "assets"
 
 # Bundled sample used to pre-warm the weight cache at startup.
 SAMPLE_IMAGE = ASSETS / "images" / "avatar_15.png"
-SAMPLE_VIDEO = ASSETS / "idle_avatar_15_reverse.mp4"
+SAMPLE_VIDEO = ASSETS / "default_1.mp4"
 
 DISTILLED = MODELS / "distilled" / "ltx-2.3-22b-distilled.safetensors"
 UPSAMPLER = MODELS / "upscaler" / "ltx-2.3-spatial-upscaler-x2-1.0.safetensors"
