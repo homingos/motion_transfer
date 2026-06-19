@@ -43,8 +43,6 @@ def _ref(name: str) -> Path:
         return asset
     return REFERENCE_DIR_VOLUME / name
 
-DEFAULT_VIDEO = _get_4sec_loop()
-
 # Default output duration (seconds) — can be overridden by environment variable
 DEFAULT_OUTPUT_SECONDS = float(os.environ.get("TARGET_OUTPUT_SECONDS", "4.0"))
 
@@ -90,6 +88,8 @@ def _get_4sec_loop() -> Path:
     except Exception as e:
         logger.error(f"Failed to create 4-second loop: {e}")
         return source
+
+DEFAULT_VIDEO = _get_4sec_loop()
 
 REFERENCE_VIDEOS = {
     "default": _get_4sec_loop(),
