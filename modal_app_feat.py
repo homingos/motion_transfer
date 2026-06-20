@@ -23,11 +23,13 @@ import modal
 
 from modal_common import (
     APP_BASENAME, MODELS_DIR,
-    build_modal_image, models_volume, mongodb_secret, r2_secret,
+    build_modal_image, models_volume, mongodb_secret,
 )
 
 # Set API mode for this environment
 os.environ["API_MODE"] = "full"
+# Set default output duration to 2 seconds (will be reversed → 4 seconds total looped)
+os.environ["TARGET_OUTPUT_SECONDS"] = "2.0"
 
 APP_NAME = APP_BASENAME + "-feat"   # "flam-motion-transfer-feat" — distinct from dev/main
 
@@ -35,9 +37,9 @@ GPU = "RTX-PRO-6000"    # 96 GB Blackwell — same card as dev/prod
 CPU = 8
 MEMORY = 98304          # 96 GB RAM
 TIMEOUT = 3600
-MIN_CONTAINERS = 0
-MAX_CONTAINERS = 1
-SCALEDOWN_WINDOW = 120
+MIN_CONTAINERS = 1      # keep one container warm (same as main/dev)
+MAX_CONTAINERS = 20     # scale to 20 GPU containers
+SCALEDOWN_WINDOW = 300   # 5 minutes — continuous traffic pattern, scale down quickly
 MAX_CONCURRENT_INPUTS = 1
 
 SCRIPT_DIR = Path(__file__).parent.resolve()
@@ -54,7 +56,7 @@ app = modal.App(APP_NAME, image=image)
     max_containers=MAX_CONTAINERS,
     scaledown_window=SCALEDOWN_WINDOW,
     volumes={MODELS_DIR: models_volume},
-    secrets=[mongodb_secret, r2_secret],  # feat: both image (no R2) and avatar_id (with R2) modes
+    secrets=[mongodb_secret],  # feat: MongoDB status tracking
     enable_memory_snapshot=True,
 )
 @modal.concurrent(max_inputs=MAX_CONCURRENT_INPUTS)
@@ -94,5 +96,5 @@ def main():
     print("🎬 FLAM — Motion Transfer · FEAT")
     print(f"  App:    {APP_NAME}  (deploy into the `feat` environment)")
     print(f"  GPU:    {GPU}  RAM: {MEMORY} MB  scaling: min={MIN_CONTAINERS} max={MAX_CONTAINERS}")
-    print("  URL:    https://ai-team-flam-feat--motion-transfer-feat.modal.run")
+    print("  URL:    https://flam-feat--motion-transfer-feat.modal.run")
     print("  Deploy: modal deploy modal_app_feat.py -e feat")

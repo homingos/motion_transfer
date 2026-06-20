@@ -9,9 +9,12 @@ UI:  open http://localhost:8000/ in a browser.
 API: POST /generate (multipart), then GET /jobs/{id} to poll, then GET /jobs/{id}/result for the mp4.
 """
 
+import asyncio
 import logging
 import os
+import subprocess
 import threading
+import time
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -25,13 +28,124 @@ from fastapi.staticfiles import StaticFiles
 import pipeline_runtime
 import integrations
 
+try:
+    from modal_common import jobs_dict
+except ImportError:
+    jobs_dict = {}  # fallback for local dev (not Modal)
+
 logger = logging.getLogger(__name__)
 
 ROOT = Path(__file__).resolve().parent
 UPLOADS = ROOT / "uploads"
 OUTPUTS = ROOT / "outputs"
 STATIC = ROOT / "static"
-DEFAULT_VIDEO = ROOT / "assets" / "idle_avatar_15_reverse.mp4"
+MOTION_TRANSFER_MODELS_DIR = Path(os.environ.get("LTX_MODELS_DIR", ROOT / "models"))
+REFERENCE_DIR_VOLUME = MOTION_TRANSFER_MODELS_DIR / "reference"  # fallback when assets not packaged (CI/CD)
+
+def _ref(name: str) -> Path:
+    """Return reference video path — assets dir first, volume fallback second."""
+    asset = ROOT / "assets" / name
+    if asset.exists():
+        return asset
+    return REFERENCE_DIR_VOLUME / name
+
+# Default output duration (seconds) — can be overridden by environment variable
+DEFAULT_OUTPUT_SECONDS = float(os.environ.get("TARGET_OUTPUT_SECONDS", "4.0"))
+
+def _get_kling_6sec_loop() -> Path:
+    """Create 6-second loop from kling video: first 3s + reversed 3s."""
+    output = REFERENCE_DIR_VOLUME / "kling_6sec_loop.mp4"
+
+    if output.exists():
+        return output
+
+    import subprocess
+    # Kling video is stored in the Modal volume's reference directory
+    source = REFERENCE_DIR_VOLUME / "kling_20260617_VIDEO_Listening__5171_0.mp4"
+    if not source.exists():
+        logger.warning(f"Kling video not found at {source}, falling back to default_ici")
+        return _ref("default_ici.mp4")
+
+    logger.info(f"Creating 6-second loop from kling video (first 3s + reversed)...")
+    tmp = output.with_suffix(".tmp.mp4")
+
+    # Extract first 3s, reverse, concatenate
+    cmd = [
+        "ffmpeg", "-y",
+        "-i", str(source),
+        "-t", "3",
+        "-filter_complex",
+        "[0:v]split=2[fwd][rev];[rev]reverse[rvid];[fwd][rvid]concat=n=2:v=1:a=0[out]",
+        "-map", "[out]",
+        "-c:v", "libx264", "-crf", "18", "-preset", "fast", "-an",
+        str(tmp),
+    ]
+
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        if result.returncode == 0:
+            tmp.replace(output)
+            logger.info(f"✅ Created 6-second kling loop: {output}")
+            return output
+        else:
+            logger.error(f"ffmpeg failed: {result.stderr[-200:]}")
+            return source
+    except Exception as e:
+        logger.error(f"Failed to create kling 6-second loop: {e}")
+        return source
+
+def _get_4sec_loop() -> Path:
+    """Lazily create idle_avatar_4sec_loop.mp4 (2s forward + 2s reverse of idle_avatar_15_reverse.mp4)."""
+    output = REFERENCE_DIR_VOLUME / "idle_avatar_4sec_loop.mp4"
+
+    # If already created, return it
+    if output.exists():
+        return output
+
+    # Create on first access
+    import subprocess
+    source = _ref("idle_avatar_15_reverse.mp4")
+    if not source.exists():
+        logger.warning(f"Source not found: {source}, falling back to default")
+        return _ref("default_ici.mp4")
+
+    logger.info(f"Creating 4-second loop reference from {source}...")
+    tmp = output.with_suffix(".tmp.mp4")
+
+    # Extract first 2s, reverse, concatenate
+    cmd = [
+        "ffmpeg", "-y",
+        "-i", str(source),
+        "-t", "2",
+        "-filter_complex",
+        "[0:v]split=2[fwd][rev];[rev]reverse[rvid];[fwd][rvid]concat=n=2:v=1:a=0[out]",
+        "-map", "[out]",
+        "-c:v", "libx264", "-crf", "18", "-preset", "fast", "-an",
+        str(tmp),
+    ]
+
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        if result.returncode == 0:
+            tmp.replace(output)
+            logger.info(f"✅ Created 4-second loop: {output}")
+            return output
+        else:
+            logger.error(f"ffmpeg failed: {result.stderr[-200:]}")
+            return source  # Fallback to 2-second version
+    except Exception as e:
+        logger.error(f"Failed to create 4-second loop: {e}")
+        return source
+
+DEFAULT_VIDEO = _ref("default_1.mp4")
+
+REFERENCE_VIDEOS = {
+    "default": _ref("man.mp4"),
+    "female": _ref("women.mp4"),
+    "male": _ref("man.mp4"),
+    "4sec-loop": _get_4sec_loop(),
+    "trimmed": _ref("10sec_trimmed.mp4"),
+}
 
 UPLOADS.mkdir(parents=True, exist_ok=True)
 OUTPUTS.mkdir(parents=True, exist_ok=True)
@@ -64,10 +178,12 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(title="LTX-2 Motion Transfer", lifespan=_lifespan)
 
-# In-memory job registry for this server instance.
-JOBS: dict[str, dict] = {}
+# Job registry: use modal.Dict if available (distributed across containers),
+# else fall back to in-memory dict for local dev.
+JOBS = jobs_dict if jobs_dict is not None else {}
 _JOB_LOCK = threading.Lock()
-# Serialize generations: the pipeline pins the whole GPU, so we run one at a time.
+# Per-container GPU lock: serialize generations within this container.
+# Multiple containers can each run one job in parallel via _GPU_LOCK per-container.
 _GPU_LOCK = threading.Lock()
 
 
@@ -77,46 +193,113 @@ def _now() -> str:
 
 def _update_job(request_id: str, **fields) -> None:
     with _JOB_LOCK:
-        if request_id in JOBS:
-            JOBS[request_id].update(fields)
+        current = JOBS.get(request_id) if isinstance(JOBS, dict) else JOBS.get(request_id)
+        if current is not None:
+            updated = {**current, **fields}
+            JOBS[request_id] = updated
+
+
+def _append_reverse(video_path: Path) -> Path:
+    """Append a reversed copy of the video to itself (forward + reverse = natural loop).
+
+    Input: 5s video → Output: 10s video (forward 5s + reversed 5s).
+    Overwrites the input file in-place. Uses ffmpeg concat filter.
+    Returns the same path on success, raises on failure.
+    """
+    import subprocess
+    tmp = video_path.with_suffix(".tmp.mp4")
+    cmd = [
+        "ffmpeg", "-y",
+        "-i", str(video_path),
+        "-filter_complex",
+        "[0:v]split=2[fwd][rev];[rev]reverse[rvid];[fwd][rvid]concat=n=2:v=1:a=0[out]",
+        "-map", "[out]",
+        "-c:v", "libx264", "-crf", "18", "-preset", "fast", "-an",
+        str(tmp),
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(f"ffmpeg reverse-append failed: {result.stderr[-500:]}")
+    tmp.replace(video_path)
+    return video_path
+
+
+def _is_transient_gpu_error(error: Exception) -> bool:
+    """Check if error is transient GPU-related (should retry) vs permanent (should fail)."""
+    error_str = str(error).lower()
+    transient_patterns = [
+        "cuda",
+        "gpu",
+        "out of memory",
+        "oom",
+        "device",
+        "allocation",
+    ]
+    return any(pattern in error_str for pattern in transient_patterns)
 
 
 def run_job(request_id: str, image_path: Path, video_path: Path, prompt: str | None,
-            lora_strength: float | None = None, video_strength: float | None = None) -> None:
+            lora_strength: float | None = None, video_strength: float | None = None,
+            crf: int | None = None, target_output_seconds: float | None = None) -> None:
     """Run the warm in-process pipeline and capture status.
 
     The pipeline keeps its weights resident in CPU RAM (shared StateDictRegistry),
     so only the first job pays the cold weight-load cost; later jobs are faster.
     pipeline_runtime serialises GPU access internally via its own lock.
+
+    Retries on transient GPU errors for up to 30 minutes, then fails with timeout.
     """
     _update_job(request_id, status="waiting_for_gpu")
-    with _GPU_LOCK:
-        _update_job(request_id, status="running", started_at=_now())
-        output_path = OUTPUTS / f"api_{request_id}.mp4"
-        try:
-            kwargs = {
-                "image_path": str(image_path),
-                "output_path": str(output_path),
-                "video_path": str(video_path),
-                "prompt": prompt or None,
-            }
-            if lora_strength is not None:
-                kwargs["lora_strength"] = lora_strength
-            if video_strength is not None:
-                kwargs["video_strength"] = video_strength
-            pipeline_runtime.generate(**kwargs)
-            if output_path.exists():
-                _update_job(request_id, status="done", finished_at=_now(),
-                     result=str(output_path.relative_to(ROOT)))
-            else:
-                _update_job(request_id, status="failed", finished_at=_now(),
-                     error="generation finished but no output file was produced")
-        except Exception as e:
-            _update_job(request_id, status="failed", finished_at=_now(), error=repr(e))
+    backoff = 2.0
+    gpu_wait_deadline = time.time() + 1800  # 30 minutes
+    while True:
+        with _GPU_LOCK:
+            _update_job(request_id, status="running", started_at=_now())
+            output_path = OUTPUTS / f"api_{request_id}.mp4"
+            try:
+                frame_rate = 25.0
+                num_frames = int(round((target_output_seconds or DEFAULT_OUTPUT_SECONDS) * frame_rate))
+                kwargs = {
+                    "image_path": str(image_path),
+                    "output_path": str(output_path),
+                    "video_path": str(video_path),
+                    "prompt": prompt or None,
+                    "num_frames": num_frames,
+                    "frame_rate": frame_rate,
+                }
+                if lora_strength is not None:
+                    kwargs["lora_strength"] = lora_strength
+                if video_strength is not None:
+                    kwargs["video_strength"] = video_strength
+                pipeline_runtime.generate(**kwargs)
+                if output_path.exists():
+                    _append_reverse(output_path)
+                    _update_job(request_id, status="done", finished_at=_now(),
+                         result=str(output_path.relative_to(ROOT)))
+                    return
+                else:
+                    _update_job(request_id, status="failed", finished_at=_now(),
+                         error="generation finished but no output file was produced")
+                    return
+            except Exception as e:
+                if _is_transient_gpu_error(e):
+                    if time.time() >= gpu_wait_deadline:
+                        _update_job(request_id, status="failed", finished_at=_now(),
+                             error=f"GPU allocation timeout after 30 minutes: {repr(e)}")
+                        return
+                    logger.warning(f"Transient GPU error in run_job({request_id}): {e!r}. Retrying in {backoff}s...")
+                    _update_job(request_id, status="waiting_for_gpu")
+                    time.sleep(backoff)
+                    backoff = min(backoff * 1.5, 30.0)  # exponential backoff, cap at 30s
+                    continue
+                else:
+                    _update_job(request_id, status="failed", finished_at=_now(), error=repr(e))
+                    return
 
 
 def run_idle_job(request_id: str, avatar_id: str, video_path: Path, prompt: str | None,
-                 lora_strength: float | None = None, video_strength: float | None = None) -> None:
+                 lora_strength: float | None = None, video_strength: float | None = None,
+                 crf: int | None = None, target_output_seconds: float | None = None) -> None:
     """Generate the idle-motion video for an avatar from its avatar_id alone.
 
     The subject image is resolved from the `fableface.templates` doc (keyed by ObjectId
@@ -127,61 +310,94 @@ def run_idle_job(request_id: str, avatar_id: str, video_path: Path, prompt: str 
       source_assets.idle_animation_key = R2 key, then status: ready       on success (key first)
       status: failed (+ failure_reason)                                   on error
     (idle_vector_key is a separate field and is left untouched.)
+
+    Retries indefinitely on transient GPU errors while staying in "waiting_for_gpu" state.
     """
     _update_job(request_id, status="fetching_source", avatar_id=avatar_id)
     integrations.set_status(avatar_id, "processing")
 
-    # Resolve + download the subject image from R2 using the doc's source_assets.image_key.
+    # Download the subject image from the URL stored in source_assets.image_key.
     try:
-        image_key = integrations.get_source_image_key(avatar_id)
-        if not image_key:
+        import requests
+        image_url = integrations.get_source_image_key(avatar_id)
+        if not image_url:
             raise RuntimeError(f"no source_assets.image_key on templates doc _id={avatar_id}")
-        image_ext = Path(image_key).suffix or ".png"
+        image_ext = ".png"
+        if "." in image_url.split("/")[-1]:
+            image_ext = "." + image_url.split(".")[-1]
         image_path = UPLOADS / f"{request_id}_{avatar_id}_source{image_ext}"
-        integrations.r2_download(image_key, image_path)
+        response = requests.get(image_url, timeout=30)
+        response.raise_for_status()
+        image_path.write_bytes(response.content)
     except Exception as e:
         _update_job(request_id, status="failed", finished_at=_now(), error=repr(e))
         integrations.set_status(avatar_id, "failed", failure_reason=repr(e))
         return
 
     _update_job(request_id, status="waiting_for_gpu")
-    with _GPU_LOCK:
-        _update_job(request_id, status="running", started_at=_now())
-        output_path = OUTPUTS / f"idle_{avatar_id}_{request_id}.mp4"
-        try:
-            kwargs = {
-                "image_path": str(image_path),
-                "output_path": str(output_path),
-                "video_path": str(video_path),
-                "prompt": prompt or None,
-            }
-            if lora_strength is not None:
-                kwargs["lora_strength"] = lora_strength
-            if video_strength is not None:
-                kwargs["video_strength"] = video_strength
-            pipeline_runtime.generate(**kwargs)
-            if not output_path.exists():
-                raise RuntimeError("generation finished but no output file was produced")
-            # Match the doc's key convention (no extension), e.g. "templates/<id>/idle".
-            animation_key = f"templates/{avatar_id}/idle"
-            link = integrations.r2_upload(output_path, key=animation_key)
-            # Write the animation KEY first, THEN flip status to ready, so a consumer that
-            # sees status="ready" is guaranteed to also see source_assets.idle_animation_key.
-            integrations.set_idle_animation_key(avatar_id, animation_key)
-            integrations.set_status(avatar_id, "ready")
-            _update_job(request_id, status="done", finished_at=_now(),
-                 result=str(output_path.relative_to(ROOT)), animation_key=animation_key, link=link)
-        except Exception as e:
-            _update_job(request_id, status="failed", finished_at=_now(), error=repr(e))
-            integrations.set_status(avatar_id, "failed", failure_reason=repr(e))
+    backoff = 2.0
+    gpu_wait_deadline = time.time() + 1800  # 30 minutes
+    while True:
+        with _GPU_LOCK:
+            _update_job(request_id, status="running", started_at=_now())
+            output_path = OUTPUTS / f"idle_{avatar_id}_{request_id}.mp4"
+            try:
+                frame_rate = 25.0
+                num_frames = int(round((target_output_seconds or DEFAULT_OUTPUT_SECONDS) * frame_rate))
+                kwargs = {
+                    "image_path": str(image_path),
+                    "output_path": str(output_path),
+                    "video_path": str(video_path),
+                    "prompt": prompt or None,
+                    "num_frames": num_frames,
+                    "frame_rate": frame_rate,
+                }
+                if lora_strength is not None:
+                    kwargs["lora_strength"] = lora_strength
+                if video_strength is not None:
+                    kwargs["video_strength"] = video_strength
+                pipeline_runtime.generate(**kwargs)
+                if not output_path.exists():
+                    raise RuntimeError("generation finished but no output file was produced")
+                # Append reversed clip so animation loops naturally (5s forward + 5s reverse)
+                _append_reverse(output_path)
+                # Upload to FLAM Resource API (GCS-backed)
+                link = integrations.flam_upload(output_path)
+                animation_key = link
+                # Write the animation KEY first, THEN flip status to ready, so a consumer that
+                # sees status="ready" is guaranteed to also see source_assets.idle_animation_key.
+                integrations.set_idle_animation_key(avatar_id, animation_key)
+                integrations.set_status(avatar_id, "ready")
+                _update_job(request_id, status="done", finished_at=_now(),
+                     result=str(output_path.relative_to(ROOT)), animation_key=animation_key, link=link)
+                return
+            except Exception as e:
+                if _is_transient_gpu_error(e):
+                    if time.time() >= gpu_wait_deadline:
+                        error_msg = f"GPU allocation timeout after 30 minutes: {repr(e)}"
+                        _update_job(request_id, status="failed", finished_at=_now(), error=error_msg)
+                        integrations.set_status(avatar_id, "failed", failure_reason=error_msg)
+                        return
+                    logger.warning(f"Transient GPU error in run_idle_job({request_id}): {e!r}. Retrying in {backoff}s...")
+                    _update_job(request_id, status="waiting_for_gpu")
+                    time.sleep(backoff)
+                    backoff = min(backoff * 1.5, 30.0)  # exponential backoff, cap at 30s
+                    continue
+                else:
+                    _update_job(request_id, status="failed", finished_at=_now(), error=repr(e))
+                    integrations.set_status(avatar_id, "failed", failure_reason=repr(e))
+                    return
 
 
 def run_idle_job_with_url(request_id: str, image_url: str, video_path: Path, prompt: str | None,
-                          lora_strength: float | None = None, video_strength: float | None = None) -> None:
+                          lora_strength: float | None = None, video_strength: float | None = None,
+                          crf: int | None = None, target_output_seconds: float | None = None) -> None:
     """Generate the idle-motion video from a GCS image URL.
 
     Downloads the image from the provided GCS URL, generates the motion video,
     and uploads the result to R2.
+
+    Retries indefinitely on transient GPU errors while staying in "waiting_for_gpu" state.
     """
     _update_job(request_id, status="fetching_source", image_url=image_url)
 
@@ -201,30 +417,52 @@ def run_idle_job_with_url(request_id: str, image_url: str, video_path: Path, pro
         return
 
     _update_job(request_id, status="waiting_for_gpu")
-    with _GPU_LOCK:
-        _update_job(request_id, status="running", started_at=_now())
-        output_path = OUTPUTS / f"idle_{request_id}.mp4"
-        try:
-            kwargs = {
-                "image_path": str(image_path),
-                "output_path": str(output_path),
-                "video_path": str(video_path),
-                "prompt": prompt or None,
-            }
-            if lora_strength is not None:
-                kwargs["lora_strength"] = lora_strength
-            if video_strength is not None:
-                kwargs["video_strength"] = video_strength
-            pipeline_runtime.generate(**kwargs)
-            if not output_path.exists():
-                raise RuntimeError("generation finished but no output file was produced")
-            # Upload to R2 with a generic key
-            animation_key = f"motion/{request_id}/idle"
-            link = integrations.r2_upload(output_path, key=animation_key)
-            _update_job(request_id, status="done", finished_at=_now(),
-                 result=str(output_path.relative_to(ROOT)), animation_key=animation_key, link=link)
-        except Exception as e:
-            _update_job(request_id, status="failed", finished_at=_now(), error=repr(e))
+    backoff = 2.0
+    gpu_wait_deadline = time.time() + 1800  # 30 minutes
+    while True:
+        with _GPU_LOCK:
+            _update_job(request_id, status="running", started_at=_now())
+            output_path = OUTPUTS / f"idle_{request_id}.mp4"
+            try:
+                frame_rate = 25.0
+                num_frames = int(round((target_output_seconds or DEFAULT_OUTPUT_SECONDS) * frame_rate))
+                kwargs = {
+                    "image_path": str(image_path),
+                    "output_path": str(output_path),
+                    "video_path": str(video_path),
+                    "prompt": prompt or None,
+                    "num_frames": num_frames,
+                    "frame_rate": frame_rate,
+                }
+                if lora_strength is not None:
+                    kwargs["lora_strength"] = lora_strength
+                if video_strength is not None:
+                    kwargs["video_strength"] = video_strength
+                pipeline_runtime.generate(**kwargs)
+                if not output_path.exists():
+                    raise RuntimeError("generation finished but no output file was produced")
+                # Append reversed clip so animation loops naturally (2s forward + 2s reverse on feat)
+                _append_reverse(output_path)
+                # Upload to FLAM Resource API (GCS-backed)
+                link = integrations.flam_upload(output_path)
+                animation_key = link
+                _update_job(request_id, status="done", finished_at=_now(),
+                     result=str(output_path.relative_to(ROOT)), animation_key=animation_key, link=link)
+                return
+            except Exception as e:
+                if _is_transient_gpu_error(e):
+                    if time.time() >= gpu_wait_deadline:
+                        _update_job(request_id, status="failed", finished_at=_now(),
+                             error=f"GPU allocation timeout after 30 minutes: {repr(e)}")
+                        return
+                    logger.warning(f"Transient GPU error in run_idle_job_with_url({request_id}): {e!r}. Retrying in {backoff}s...")
+                    _update_job(request_id, status="waiting_for_gpu")
+                    time.sleep(backoff)
+                    backoff = min(backoff * 1.5, 30.0)  # exponential backoff, cap at 30s
+                    continue
+                else:
+                    _update_job(request_id, status="failed", finished_at=_now(), error=repr(e))
+                    return
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -235,10 +473,13 @@ def index() -> str:
 @app.post("/generate")
 async def generate(
     image: UploadFile = File(..., description="Subject image (PNG or JPG)"),
-    video: UploadFile | None = File(None, description="Reference motion video (optional; defaults to assets/idle_avatar_15_reverse.mp4)"),
+    video: UploadFile | None = File(None, description="Reference motion video (optional; overrides gender-based reference if provided)"),
     prompt: str | None = Form(None, description="Text prompt (optional; main.py has a sensible default)"),
     lora_strength: float | None = Form(None, description="LoRA strength (optional, 0.0-1.0; default 0.8)"),
     video_strength: float | None = Form(None, description="Video conditioning strength (optional, 0.0-1.0; default 0.95)"),
+    crf: int | None = Form(None, description="Image CRF compression (optional, 18-28; default 18; higher = more smoothing)"),
+    target_output_seconds: float | None = Form(None, description="Target output duration in seconds (optional, default 4.0)"),
+    gender: str = Form(..., description="Avatar gender: 'male' or 'female'"),
 ):
     request_id = uuid.uuid4().hex[:12]
 
@@ -256,53 +497,62 @@ async def generate(
         video_path.write_bytes(video_bytes)
         used_default = False
     else:
-        video_path = DEFAULT_VIDEO
+        reference = "male" if gender == "male" else "female"
+        video_path = REFERENCE_VIDEOS[reference]
         used_default = True
 
-    with _JOB_LOCK:
-        JOBS[request_id] = {
-            "status": "pending",
-            "image": image.filename,
-            "video": video_path.name,
-            "used_default_video": used_default,
-            "prompt": prompt,
-            "submitted_at": _now(),
-        }
+    job_data = {
+        "status": "pending",
+        "image": image.filename,
+        "video": video_path.name,
+        "used_default_video": used_default,
+        "prompt": prompt,
+        "submitted_at": _now(),
+    }
+    await JOBS.put.aio(request_id, job_data)
 
-    threading.Thread(target=run_job, args=(request_id, image_path, video_path, prompt, lora_strength, video_strength), daemon=True).start()
-    return {"request_id": request_id, **JOBS[request_id]}
+    # Use environment default if not provided
+    output_seconds = target_output_seconds if target_output_seconds is not None else DEFAULT_OUTPUT_SECONDS
+    threading.Thread(target=run_job, args=(request_id, image_path, video_path, prompt, lora_strength, video_strength, crf, output_seconds), daemon=True).start()
+    return {"request_id": request_id, **job_data}
 
 
 @app.post("/idle-motion")
 async def idle_motion(
-    image_url: str = Form(..., description="GCS image URL — direct URL to the image to process."),
-    lora_strength: float | None = Form(None, description="LoRA strength (optional, 0.0-1.0; default 0.8)"),
-    video_strength: float | None = Form(None, description="Video conditioning strength (optional, 0.0-1.0; default 0.95)"),
+    image_url: str = Form(..., description="GCS image URL of the avatar image."),
+    gender: str = Form(..., description="'male' or 'female'. Required."),
 ):
     """Generate an idle-motion video from a GCS image URL.
 
     Async: returns a request_id immediately. The image is downloaded from the provided GCS URL;
-    generation uses the bundled reference clip. Status is tracked in memory; on success the
-    generated idle video is uploaded to R2.
+    generation uses the reference motion matching the specified gender (required: male or female).
+    Status is tracked; on success the generated idle video is uploaded to GCS.
     """
     image_url = image_url.strip()
     if not image_url:
         raise HTTPException(400, "image_url is required")
 
+    if gender == "female":
+        reference = "female"
+        output_seconds = DEFAULT_OUTPUT_SECONDS  # 2.0s forward + 2.0s reverse = 4s total
+    else:
+        reference = "male"  # Default to male (man.mp4)
+        output_seconds = DEFAULT_OUTPUT_SECONDS  # 2.0s forward + 2.0s reverse = 4s total
+
     request_id = uuid.uuid4().hex[:12]
-    video_path = DEFAULT_VIDEO  # idle-motion always uses the bundled reference clip
+    video_path = REFERENCE_VIDEOS[reference]
 
-    with _JOB_LOCK:
-        JOBS[request_id] = {
-            "status": "pending",
-            "image_url": image_url,
-            "video": video_path.name,
-            "submitted_at": _now(),
-        }
+    job_data = {
+        "status": "pending",
+        "image_url": image_url,
+        "video": video_path.name,
+        "submitted_at": _now(),
+    }
+    await JOBS.put.aio(request_id, job_data)
 
-    threading.Thread(target=run_idle_job_with_url, args=(request_id, image_url, video_path, None, lora_strength, video_strength),
+    threading.Thread(target=run_idle_job_with_url, args=(request_id, image_url, video_path, None, None, None, None, output_seconds),
                      daemon=True).start()
-    return {"request_id": request_id, **JOBS[request_id]}
+    return {"request_id": request_id, **job_data}
 
 
 @app.get("/avatar/{avatar_id}/info")
@@ -331,23 +581,27 @@ def avatar_info(avatar_id: str):
 
     if image_key:
         try:
-            image_exists = integrations.r2_object_exists(image_key)
+            import requests
+            response = requests.head(image_key, timeout=10, allow_redirects=True)
+            image_exists = response.status_code < 400
         except Exception as e:
-            raise HTTPException(502, f"r2 head_object failed for {image_key!r}: {e!r}")
+            logger.warning("failed to check image URL: %r", e)
 
     if idle_animation_key:
         try:
-            animation_exists = integrations.r2_object_exists(idle_animation_key)
+            import requests
+            response = requests.head(idle_animation_key, timeout=10, allow_redirects=True)
+            animation_exists = response.status_code < 400
         except Exception as e:
-            logger.warning("failed to check animation key in R2: %r", e)
+            logger.warning("failed to check animation URL: %r", e)
 
     return {
         "avatar_id": avatar_id,
         "status": summary.get("status"),
         "image_key": image_key,
-        "image_exists_in_r2": image_exists,
+        "image_exists": image_exists,
         "idle_animation_key": idle_animation_key,
-        "idle_animation_exists_in_r2": animation_exists,
+        "idle_animation_exists": animation_exists,
     }
 
 
@@ -395,15 +649,17 @@ def idle_motion_preview(avatar_id: str):
                 "reason": "doc has no source_assets.image_key", **summary}
 
     try:
-        exists = integrations.r2_object_exists(image_key)
+        import requests
+        response = requests.head(image_key, timeout=10, allow_redirects=True)
+        exists = response.status_code < 400
     except Exception as e:
-        raise HTTPException(502, f"r2 head_object failed for {image_key!r}: {e!r}")
+        logger.warning("failed to check image URL: %r", e)
+        exists = False
 
     return {
         "avatar_id": avatar_id,
         "ok": exists,
-        "reason": None if exists else f"image_key not found in R2: {image_key}",
-        "would_write_animation_key": f"templates/{avatar_id}/idle",
+        "reason": None if exists else f"image_key not accessible: {image_key}",
         **summary,
     }
 
@@ -415,6 +671,9 @@ async def animate(
     prompt: str | None = Form(None, description="Text prompt (optional)"),
     lora_strength: float | None = Form(None, description="LoRA strength (optional, 0.0-1.0; default 0.8)"),
     video_strength: float | None = Form(None, description="Video conditioning strength (optional, 0.0-1.0; default 0.95)"),
+    crf: int | None = Form(None, description="Image CRF compression (optional, 18-28; default 18; higher = more smoothing)"),
+    target_output_seconds: float | None = Form(None, description="Target output duration in seconds (optional, default 4.0)"),
+    reference: str = Form("default", description="Preset reference video: 'default' (female), 'female', or 'male'"),
     _: None = Depends(_public_api_key_guard),
 ):
     """Unified endpoint: image → MP4 directly; avatar_id → request_id for polling.
@@ -441,6 +700,9 @@ async def animate(
 
     # ============= IMAGE MODE (SYNCHRONOUS) =============
     if image:
+        if reference not in REFERENCE_VIDEOS:
+            raise HTTPException(400, f"invalid reference: {reference}; must be one of {list(REFERENCE_VIDEOS.keys())}")
+
         request_id = uuid.uuid4().hex[:12]
 
         image_bytes = await image.read()
@@ -449,21 +711,27 @@ async def animate(
         image_path = UPLOADS / f"{request_id}_image_{image.filename}"
         image_path.write_bytes(image_bytes)
 
-        video_path = DEFAULT_VIDEO
+        video_path = REFERENCE_VIDEOS[reference]
         output_path = OUTPUTS / f"sync_{request_id}.mp4"
 
         # Run synchronously (blocking) and return the MP4 file directly
         try:
+            # Use environment default if not provided
+            output_seconds = target_output_seconds if target_output_seconds is not None else DEFAULT_OUTPUT_SECONDS
+
             kwargs = {
                 "image_path": str(image_path),
                 "output_path": str(output_path),
                 "video_path": str(video_path),
                 "prompt": prompt or None,
+                "target_output_seconds": output_seconds,
             }
             if lora_strength is not None:
                 kwargs["lora_strength"] = lora_strength
             if video_strength is not None:
                 kwargs["video_strength"] = video_strength
+            if crf is not None:
+                kwargs["crf"] = crf
 
             with _GPU_LOCK:
                 pipeline_runtime.generate(**kwargs)
@@ -483,27 +751,32 @@ async def animate(
 
     # ============= AVATAR ID MODE (ASYNCHRONOUS) =============
     else:
+        if reference not in REFERENCE_VIDEOS:
+            raise HTTPException(400, f"invalid reference: {reference}; must be one of {list(REFERENCE_VIDEOS.keys())}")
+
         avatar_id = avatar_id.strip()
         if not avatar_id:
             raise HTTPException(400, "avatar_id is required and cannot be empty")
 
         request_id = uuid.uuid4().hex[:12]
-        video_path = DEFAULT_VIDEO
+        video_path = REFERENCE_VIDEOS[reference]
 
-        with _JOB_LOCK:
-            JOBS[request_id] = {
-                "status": "pending",
-                "avatar_id": avatar_id,
-                "video": video_path.name,
-                "submitted_at": _now(),
-            }
+        job_data = {
+            "status": "pending",
+            "avatar_id": avatar_id,
+            "video": video_path.name,
+            "submitted_at": _now(),
+        }
+        await JOBS.put.aio(request_id, job_data)
 
+        # Use environment default if not provided
+        output_seconds = target_output_seconds if target_output_seconds is not None else DEFAULT_OUTPUT_SECONDS
         threading.Thread(
             target=run_idle_job,
-            args=(request_id, avatar_id, video_path, None, lora_strength, video_strength),
+            args=(request_id, avatar_id, video_path, None, lora_strength, video_strength, crf, output_seconds),
             daemon=True,
         ).start()
-        return {"request_id": request_id, **JOBS[request_id]}
+        return {"request_id": request_id, **job_data}
 
 
 @app.get("/jobs/{request_id}")
@@ -517,9 +790,24 @@ def get_job(request_id: str):
 def get_result(request_id: str):
     if request_id not in JOBS:
         raise HTTPException(404, "request not found")
-    if JOBS[request_id].get("status") != "done":
-        raise HTTPException(409, f"job not done (status={JOBS[request_id].get('status')})")
-    return FileResponse(ROOT / JOBS[request_id]["result"], media_type="video/mp4", filename=f"motion_transfer_{request_id}.mp4")
+    job = JOBS[request_id]
+    if job.get("status") != "done":
+        raise HTTPException(409, f"job not done (status={job.get('status')})")
+    # If job was uploaded to GCS (idle jobs), redirect to the permanent URL
+    if job.get("link"):
+        from fastapi.responses import RedirectResponse
+        return RedirectResponse(url=job["link"])
+    # Otherwise serve local file (from /generate endpoint, plain file output)
+    return FileResponse(ROOT / job["result"], media_type="video/mp4", filename=f"motion_transfer_{request_id}.mp4")
+
+
+@app.get("/reference/{name}")
+async def reference_video(name: str):
+    """Serve a reference video from assets or volume fallback."""
+    path = _ref(name)
+    if not path.exists():
+        raise HTTPException(404, f"reference video '{name}' not found")
+    return FileResponse(str(path), media_type="video/mp4")
 
 
 app.mount("/static", StaticFiles(directory=str(STATIC)), name="static")

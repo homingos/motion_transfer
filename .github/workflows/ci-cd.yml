@@ -1,0 +1,61 @@
+name: CI/CD
+
+on:
+  pull_request:
+    types: [closed]
+    branches:
+      - dev
+      - production
+  push:
+    branches:
+      - 'feat/**'
+    paths-ignore:
+      - '.github/workflows/**'
+
+jobs:
+  deploy:
+    name: Deploy
+    if: |
+      (github.event_name == 'pull_request' && github.event.pull_request.merged == true) ||
+      (github.event_name == 'push' && startsWith(github.ref, 'refs/heads/feat/'))
+    runs-on: ubuntu-latest
+
+    env:
+      MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+      MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Modal
+        run: |
+          python -m pip install --upgrade pip
+          pip install modal
+
+      - name: Set environment
+        id: set-env
+        run: |
+          if [ "${{ github.event_name }}" = "push" ] && [[ "${{ github.ref }}" == refs/heads/feat/* ]]; then
+            echo "deploy_env=feat" >> $GITHUB_OUTPUT
+            echo "app_file=modal_app_feat.py" >> $GITHUB_OUTPUT
+
+          elif [ "${{ github.base_ref }}" = "production" ]; then
+            echo "deploy_env=main" >> $GITHUB_OUTPUT
+            echo "app_file=modal_app_main.py" >> $GITHUB_OUTPUT
+
+          elif [ "${{ github.base_ref }}" = "dev" ]; then
+            echo "deploy_env=dev" >> $GITHUB_OUTPUT
+            echo "app_file=modal_app_dev.py" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Deploy to Modal
+        run: |
+          modal deploy ${{ steps.set-env.outputs.app_file }} --env ${{ steps.set-env.outputs.deploy_env }}

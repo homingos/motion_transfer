@@ -209,7 +209,7 @@ def encode_video(
     _, height, width, _ = first_chunk.shape
 
     container = av.open(output_path, mode="w")
-    stream = container.add_stream("libx264", rate=int(fps))
+    stream = container.add_stream("libx264", rate=int(fps), options={"preset": "ultrafast"})
     stream.width = width
     stream.height = height
     stream.pix_fmt = "yuv420p"

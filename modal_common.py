@@ -37,16 +37,15 @@ MODELS_DIR = "/app/models"
 MODELS_VOLUME_NAME = "motion-transfer-models"
 models_volume = modal.Volume.from_name(MODELS_VOLUME_NAME, create_if_missing=True)
 
-# Secrets for the /idle-motion flow. Secret names are PER-ENVIRONMENT:
-#   dev env  (modal deploy ... -e dev): mongodb-secret, r2-secret   <-- current target
-#   main env (default):                 fable-face-secrets, cloudfare-creds
+# Secrets for the /idle-motion flow.
 # Contents required (env-var key names inside the secret must match integrations.py exactly):
-#   mongodb-secret : MONGODB_URI
-#   r2-secret      : R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET_NAME,
-#                    and (optional) R2_PUBLIC_BASE_URL
-# A key-name mismatch (e.g. R2_BUCKET vs R2_BUCKET_NAME) raises KeyError at request time.
+#   mongodb-secret : MONGODB_URI (for job status tracking in MongoDB)
+# FLAM Resource API (GCS upload) uses no secrets — it's an internal service.
 mongodb_secret = modal.Secret.from_name("mongodb-secret")  # MONGODB_URI
-r2_secret = modal.Secret.from_name("r2-secret")            # R2_ACCOUNT_ID/ACCESS_KEY_ID/SECRET_ACCESS_KEY/BUCKET_NAME/PUBLIC_BASE_URL
+
+# Shared job state dictionary for distributed polling across multiple containers.
+# Allows any container to serve GET /jobs/{id} for any job, enabling MAX_CONTAINERS > 1.
+jobs_dict = modal.Dict.from_name("motion-transfer-jobs", create_if_missing=True)
 
 
 def build_modal_image(script_dir: Path) -> modal.Image:

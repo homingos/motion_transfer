@@ -2,7 +2,7 @@
 FLAM — Motion Transfer · Modal DEV deployment.
 
 Same app/image as production, intended for the `dev` Modal environment so dev and
-prod stay isolated within the ai-team-flam workspace:
+prod stay isolated within the flam workspace:
 
     modal environment create dev                       # once
     modal volume create motion-transfer-models -e dev
@@ -25,11 +25,13 @@ import modal
 
 from modal_common import (
     APP_BASENAME, MODELS_DIR,
-    build_modal_image, models_volume, mongodb_secret, r2_secret,
+    build_modal_image, models_volume, mongodb_secret, jobs_dict,
 )
 
 # Set API mode for this environment
 os.environ["API_MODE"] = "r2_only"
+# Set default output duration to 2 seconds (will be reversed → 4 seconds total looped)
+os.environ["TARGET_OUTPUT_SECONDS"] = "2.0"
 
 APP_NAME = APP_BASENAME          # same name; isolated by the `dev` environment
 
@@ -37,9 +39,9 @@ GPU = "RTX-PRO-6000"    # 96 GB Blackwell (~$3.03/hr); same card used on Lightni
 CPU = 8
 MEMORY = 98304          # 96 GB RAM (weight load holds ~80 GB)
 TIMEOUT = 3600
-MIN_CONTAINERS = 0      # scale to zero — $0 idle (cold load + preemption risk on first request)
-MAX_CONTAINERS = 1      # single GPU; in-memory job state (see modal_app_main.py note)
-SCALEDOWN_WINDOW = 120
+MIN_CONTAINERS = 1      # keep one container warm to avoid GPU provisioning delays
+MAX_CONTAINERS = 5      # scale to 5 GPU containers; job state in modal.Dict for distributed polling
+SCALEDOWN_WINDOW = 300  # 5 min: scale down containers after 5 minutes of no jobs
 MAX_CONCURRENT_INPUTS = 1
 
 SCRIPT_DIR = Path(__file__).parent.resolve()
@@ -56,7 +58,7 @@ app = modal.App(APP_NAME, image=image)
     max_containers=MAX_CONTAINERS,
     scaledown_window=SCALEDOWN_WINDOW,
     volumes={MODELS_DIR: models_volume},
-    secrets=[mongodb_secret, r2_secret],   # /idle-motion: Mongo status + R2 upload creds
+    secrets=[mongodb_secret],   # /idle-motion: MongoDB status tracking
     enable_memory_snapshot=True,   # snapshot CPU RAM so cold starts skip the ~20-min weight read
 )
 @modal.concurrent(max_inputs=MAX_CONCURRENT_INPUTS)
@@ -101,6 +103,6 @@ def main():
     print("🎬 FLAM — Motion Transfer · DEV")
     print(f"  App:   {APP_NAME}  (deploy into the `dev` environment)")
     print(f"  GPU:   {GPU}  RAM: {MEMORY} MB  scaling: min={MIN_CONTAINERS} max={MAX_CONTAINERS}")
-    print("  URL:   https://ai-team-flam-dev--motion-transfer-dev.modal.run  (label=motion-transfer-dev)")
-    print("         NOTE: the env ('dev') is part of the workspace slug -> 'ai-team-flam-dev--...'")
+    print("  URL:   https://flam-dev--motion-transfer-dev.modal.run  (label=motion-transfer-dev)")
+    print("         NOTE: the env ('dev') is part of the workspace slug -> 'flam-dev--...'")
     print("  Deploy: modal deploy modal_app_dev.py -e dev")

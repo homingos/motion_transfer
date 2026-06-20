@@ -21,30 +21,30 @@ import modal
 
 from modal_common import (
     APP_BASENAME, MODELS_DIR,
-    build_modal_image, models_volume, mongodb_secret, r2_secret,
+    build_modal_image, models_volume, mongodb_secret, jobs_dict,
 )
 
 # =============================================================================
-# Production configuration (ai-team-flam, Starter plan)
+# Production configuration (flam, Starter plan)
 # =============================================================================
+
+import os
+
+# Set default output duration to 2 seconds (will be reversed → 4 seconds total looped)
+os.environ["TARGET_OUTPUT_SECONDS"] = "2.0"
 
 APP_NAME = APP_BASENAME                                  # "flam-motion-transfer"
 # Custom domains need a Team plan + DNS; on Starter we use the default
 # auto-generated https://<workspace>--<app>-...modal.run URL (printed on deploy).
 
-GPU = "L40S"            # 48 GB VRAM — pipeline peaks ~20 GB
+GPU = "RTX-PRO-6000"            # 48 GB VRAM — pipeline peaks ~20 GB
 CPU = 8
 MEMORY = 98304          # 96 GB RAM — weight load holds ~80 GB (40 GB would OOM)
 TIMEOUT = 3600          # 1h: first container start loads weights (~15-20 min)
-MIN_CONTAINERS = 0      # scale to zero — conserve the $30 credits (cold start on first hit)
-MAX_CONTAINERS = 1      # single GPU, serialized; in-memory job state (see note below)
-SCALEDOWN_WINDOW = 300  # keep warm 5 min after the last request
-MAX_CONCURRENT_INPUTS = 1  # the pipeline pins the whole GPU; one job at a time
-
-# NOTE on scaling: server.py keeps job state in an in-process dict, so polling
-# /jobs/{id} must hit the same container that created the job. That's why
-# MAX_CONTAINERS=1. To scale horizontally, move JOBS into a modal.Dict so any
-# container can serve a poll, then raise MAX_CONTAINERS.
+MIN_CONTAINERS = 1      # keep one container warm to avoid GPU provisioning delays
+MAX_CONTAINERS = 20     # scale to 20 GPU containers; job state in modal.Dict for distributed polling
+SCALEDOWN_WINDOW = 300   # 5 minutes — continuous traffic pattern, scale down quickly
+MAX_CONCURRENT_INPUTS = 1  # the pipeline pins the whole GPU; one job per container at a time
 
 SCRIPT_DIR = Path(__file__).parent.resolve()
 image = build_modal_image(SCRIPT_DIR)
@@ -64,7 +64,7 @@ app = modal.App(APP_NAME, image=image)
     max_containers=MAX_CONTAINERS,
     scaledown_window=SCALEDOWN_WINDOW,
     volumes={MODELS_DIR: models_volume},
-    secrets=[mongodb_secret, r2_secret],   # /idle-motion: Mongo status + R2 read/upload creds
+    secrets=[mongodb_secret],   # /idle-motion: MongoDB status tracking
     enable_memory_snapshot=True,   # snapshot CPU RAM so cold starts skip the ~18-min weight read
 )
 @modal.concurrent(max_inputs=MAX_CONCURRENT_INPUTS)
@@ -99,7 +99,7 @@ class MotionTransferInference:
         pipeline_runtime.bind_pipeline_to_gpu()
         pipeline_runtime.prewarm_weights()
 
-    @modal.asgi_app()
+    @modal.asgi_app(label="motion-transfer")
     def fastapi_app(self):
         # server.py's lifespan builds the pipeline object (cheap). Weights are already
         # resident in CPU RAM from the restored memory snapshot, so the first real
@@ -115,14 +115,13 @@ class MotionTransferInference:
 @app.local_entrypoint()
 def main():
     print("=" * 60)
-    print("🎬 FLAM — Motion Transfer · Deployment (ai-team-flam)")
+    print("🎬 FLAM — Motion Transfer · Deployment (flam)")
     print("=" * 60)
     print(f"  App name:  {APP_NAME}")
     print(f"  GPU:       {GPU}   CPU: {CPU}   RAM: {MEMORY} MB")
     print(f"  Scaling:   min={MIN_CONTAINERS} max={MAX_CONTAINERS} (scale-to-zero)")
     print()
-    print("  URL: shown in `modal deploy` output and on the Modal dashboard")
-    print("       (auto-generated *.modal.run — custom domains need a Team plan).")
+    print("  URL: https://flam--motion-transfer.modal.run")
     print("  Endpoints once deployed: /  /generate  /jobs/{id}  /jobs/{id}/result  /docs")
     print()
     print("🚀 Deploy:  modal deploy modal_app_main.py")
