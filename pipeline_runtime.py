@@ -53,7 +53,7 @@ ASSETS = ROOT / "assets"
 
 # Bundled sample used to pre-warm the weight cache at startup.
 SAMPLE_IMAGE = ASSETS / "images" / "avatar_15.png"
-SAMPLE_VIDEO = ASSETS / "idle_avatar_15_reverse.mp4"
+SAMPLE_VIDEO = ASSETS / "default_1.mp4"
 
 DISTILLED = MODELS / "distilled" / "ltx-2.3-22b-distilled.safetensors"
 UPSAMPLER = MODELS / "upscaler" / "ltx-2.3-spatial-upscaler-x2-1.0.safetensors"
@@ -61,9 +61,14 @@ GEMMA = MODELS / "gemma"
 LORA = MODELS / "ic-lora" / "ltx-2.3-22b-ic-lora-motion-track-control-ref0.5.safetensors"
 
 DEFAULT_PROMPT = (
-    "A person facing the camera with subtle head and shoulder movement, "
-    "minimal facial expression, no eyebrow movement, closed mouth, natural blinking, "
-    "professional headshot lighting, neutral background, photorealistic"
+    "A person facing the camera with subtle head and shoulder movement only. "
+    "Absolutely no facial expression changes. Eyes stay open and completely still, NO BLINKING. "
+    "Eyebrows completely frozen, no raising or lowering whatsoever. "
+    "Mouth stays tightly closed, no parting or movement. No lips moving. "
+    "No jaw movement, no cheek movement, no nose movement. "
+    "Face is completely neutral and expressionless with zero micro-expressions and zero eye movement. "
+    "Only gentle head tilts and shoulder shifts allowed. "
+    "Professional headshot lighting, neutral background, photorealistic."
 )
 
 # Defaults mirror main.py's argparse defaults.

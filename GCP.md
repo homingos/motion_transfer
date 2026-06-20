@@ -16,11 +16,12 @@ This is the **GCS-backed mode** with FLAM Resource API integration. You send a G
 ## How It Works (Plain Terms)
 
 1. You provide a **GCS image URL** (direct public URL to the image)
-2. System downloads the image from GCS
-3. Generates the motion video (default 5 seconds)
-4. **Appends reversed clip** (5s forward + 5s reverse = natural loop, ~10s total)
-5. Uploads the looped video to GCS via **FLAM Resource API** (internal service)
-6. Returns permanent public GCS URL in response
+2. You optionally specify a **gender** (male or female for motion style)
+3. System downloads the image from GCS
+4. Generates the motion video (default 2 seconds)
+5. **Appends reversed clip** (2s forward + 2s reverse = natural loop, 4s total)
+6. Uploads the looped video to GCS via **FLAM Resource API** (internal service)
+7. Returns permanent public GCS URL in response
 
 ## Storage Details
 
@@ -32,11 +33,17 @@ This is the **GCS-backed mode** with FLAM Resource API integration. You send a G
 ## API Endpoints
 
 ### 1. Generate Motion Video
-**Submit a generation job with GCS image URL**
+**Submit a generation job with GCS image URL and optional gender**
 
 ```bash
+# Female motion (default)
 curl -X POST https://flam-dev--motion-transfer-dev.modal.run/idle-motion \
   -F "image_url=https://storage.googleapis.com/bucket/path/to/image.jpg"
+
+# Male motion
+curl -X POST https://flam-dev--motion-transfer-dev.modal.run/idle-motion \
+  -F "image_url=https://storage.googleapis.com/bucket/path/to/image.jpg" \
+  -F "gender=male"
 ```
 
 Response:
@@ -45,6 +52,7 @@ Response:
   "request_id": "abc123def456",
   "status": "pending",
   "image_url": "https://storage.googleapis.com/bucket/path/to/image.jpg",
+  "video": "default_1.mp4",
   "submitted_at": "2024-06-18T14:30:00Z"
 }
 ```
@@ -86,9 +94,10 @@ curl https://flam-dev--motion-transfer-dev.modal.run/jobs/abc123def456/result \
 ## Step-by-Step Example
 
 ```bash
-# 1. Submit generation job with GCS image URL
+# 1. Submit generation job with GCS image URL and gender
 REQUEST_ID=$(curl -X POST https://flam-dev--motion-transfer-dev.modal.run/idle-motion \
-  -F "image_url=https://storage.googleapis.com/bucket/path/to/image.jpg" | jq -r '.request_id')
+  -F "image_url=https://storage.googleapis.com/bucket/path/to/image.jpg" \
+  -F "gender=male" | jq -r '.request_id')
 
 echo "Submitted job: $REQUEST_ID"
 
@@ -107,16 +116,14 @@ done
 curl https://flam-dev--motion-transfer-dev.modal.run/jobs/$REQUEST_ID/result \
   --output my_video.mp4
 
-echo "Done! Video saved as my_video.mp4 (forward + reverse loop, ~10s)"
+echo "Done! Video saved as my_video.mp4 (forward + reverse loop, 4s total)"
 ```
 
 ## Parameters
 
 ### Generate Motion Video (`/idle-motion`)
 - **image_url** (required) - Direct GCS URL to the image (must be publicly accessible)
-- **lora_strength** (optional) - LoRA strength control (0.0-1.0, default 0.8)
-- **video_strength** (optional) - Motion conditioning strength (0.0-1.0, default 0.95)
-- **reference** (optional) - Preset reference video: "default" (female), "female", or "male" (default: "default")
+- **gender** (optional) - Motion style: "male" or "female" (default: female if not provided)
 
 ## How to Check Jobs
 
@@ -159,9 +166,10 @@ done
 To test the full flow:
 
 ```bash
-# 1. Submit with a real GCS image URL
+# 1. Submit with a real GCS image URL and gender
 curl -X POST https://flam-dev--motion-transfer-dev.modal.run/idle-motion \
-  -F "image_url=https://storage.googleapis.com/bucket-fi-production-apps-0672ab2d/original/images/abjc7aansjubgqxv5epzew7g.jpg"
+  -F "image_url=https://storage.googleapis.com/bucket-fi-production-apps-0672ab2d/original/images/abjc7aansjubgqxv5epzew7g.jpg" \
+  -F "gender=female"
 
 # Response includes request_id
 # Save this REQUEST_ID
@@ -173,7 +181,7 @@ curl https://flam-dev--motion-transfer-dev.modal.run/jobs/REQUEST_ID
 sleep 10
 curl https://flam-dev--motion-transfer-dev.modal.run/jobs/REQUEST_ID
 
-# 4. After processing (2-5 mins), check final status (should be done)
+# 4. After processing (1-3 mins), check final status (should be done)
 curl https://flam-dev--motion-transfer-dev.modal.run/jobs/REQUEST_ID
 
 # 5. If status is done, download the result (forward + reverse looped video)
@@ -185,9 +193,9 @@ curl https://flam-dev--motion-transfer-dev.modal.run/jobs/REQUEST_ID/result \
 
 - ✅ **GCS Input URLs**: Public GCS image URLs with direct download support
 - ✅ **GCS Output Storage**: Videos uploaded to GCS via FLAM Resource API as permanent public resources
-- ✅ **Natural Looping**: Forward generation (5s) + reversed clip (5s) = ~10s loopable video
-- ✅ **Fast Processing**: ~20-40 seconds per generation
-- ✅ **Multiple Reference Styles**: Default (female), female, and male motion references
+- ✅ **Natural Looping**: Forward generation (2s) + reversed clip (2s) = 4s loopable video
+- ✅ **Fast Processing**: ~1-3 minutes per generation (GPU-dependent)
+- ✅ **Gender-Aware Motion**: Male and female motion references based on avatar gender hint
 - ✅ **Permanent URLs**: GCS public URLs never expire
 
 ## Status Transitions
@@ -207,7 +215,8 @@ done  (returns GCS public URL)
 ## Notes
 
 - Image must be accessible from a public GCS URL (no authentication required for download)
-- Generation takes 2-5 minutes (varies by queue)
-- Videos are looped: forward motion + reverse motion (natural seamless loop)
+- Generation takes 1-3 minutes (varies by queue and GPU availability)
+- Videos are looped: forward motion (2s) + reverse motion (2s) = 4s natural seamless loop
 - Result videos are stored in GCS permanently with public HTTP access
 - FLAM Resource API handles all GCS authentication server-side
+- Gender defaults to female if not specified

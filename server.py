@@ -9,6 +9,7 @@ UI:  open http://localhost:8000/ in a browser.
 API: POST /generate (multipart), then GET /jobs/{id} to poll, then GET /jobs/{id}/result for the mp4.
 """
 
+import asyncio
 import logging
 import os
 import subprocess
@@ -48,10 +49,50 @@ def _ref(name: str) -> Path:
         return asset
     return REFERENCE_DIR_VOLUME / name
 
-DEFAULT_VIDEO = _ref("default_ici.mp4")
-
 # Default output duration (seconds) — can be overridden by environment variable
 DEFAULT_OUTPUT_SECONDS = float(os.environ.get("TARGET_OUTPUT_SECONDS", "4.0"))
+
+def _get_kling_6sec_loop() -> Path:
+    """Create 6-second loop from kling video: first 3s + reversed 3s."""
+    output = REFERENCE_DIR_VOLUME / "kling_6sec_loop.mp4"
+
+    if output.exists():
+        return output
+
+    import subprocess
+    # Kling video is stored in the Modal volume's reference directory
+    source = REFERENCE_DIR_VOLUME / "kling_20260617_VIDEO_Listening__5171_0.mp4"
+    if not source.exists():
+        logger.warning(f"Kling video not found at {source}, falling back to default_ici")
+        return _ref("default_ici.mp4")
+
+    logger.info(f"Creating 6-second loop from kling video (first 3s + reversed)...")
+    tmp = output.with_suffix(".tmp.mp4")
+
+    # Extract first 3s, reverse, concatenate
+    cmd = [
+        "ffmpeg", "-y",
+        "-i", str(source),
+        "-t", "3",
+        "-filter_complex",
+        "[0:v]split=2[fwd][rev];[rev]reverse[rvid];[fwd][rvid]concat=n=2:v=1:a=0[out]",
+        "-map", "[out]",
+        "-c:v", "libx264", "-crf", "18", "-preset", "fast", "-an",
+        str(tmp),
+    ]
+
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        if result.returncode == 0:
+            tmp.replace(output)
+            logger.info(f"✅ Created 6-second kling loop: {output}")
+            return output
+        else:
+            logger.error(f"ffmpeg failed: {result.stderr[-200:]}")
+            return source
+    except Exception as e:
+        logger.error(f"Failed to create kling 6-second loop: {e}")
+        return source
 
 def _get_4sec_loop() -> Path:
     """Lazily create idle_avatar_4sec_loop.mp4 (2s forward + 2s reverse of idle_avatar_15_reverse.mp4)."""
@@ -96,11 +137,13 @@ def _get_4sec_loop() -> Path:
         logger.error(f"Failed to create 4-second loop: {e}")
         return source
 
+DEFAULT_VIDEO = _ref("default_1.mp4")
+
 REFERENCE_VIDEOS = {
-    "default": _ref("default_ici.mp4"),
-    "female": _ref("idle_avatar_15_reverse.mp4"),
+    "default": _ref("man.mp4"),
+    "female": _ref("women.mp4"),
+    "male": _ref("man.mp4"),
     "4sec-loop": _get_4sec_loop(),
-    "male": _ref("idle_male.mp4"),
     "trimmed": _ref("10sec_trimmed.mp4"),
 }
 
@@ -137,7 +180,7 @@ app = FastAPI(title="LTX-2 Motion Transfer", lifespan=_lifespan)
 
 # Job registry: use modal.Dict if available (distributed across containers),
 # else fall back to in-memory dict for local dev.
-JOBS = jobs_dict if isinstance(jobs_dict, dict) and jobs_dict is not None else {}
+JOBS = jobs_dict if jobs_dict is not None else {}
 _JOB_LOCK = threading.Lock()
 # Per-container GPU lock: serialize generations within this container.
 # Multiple containers can each run one job in parallel via _GPU_LOCK per-container.
@@ -430,13 +473,13 @@ def index() -> str:
 @app.post("/generate")
 async def generate(
     image: UploadFile = File(..., description="Subject image (PNG or JPG)"),
-    video: UploadFile | None = File(None, description="Reference motion video (optional; overrides 'reference' if provided)"),
+    video: UploadFile | None = File(None, description="Reference motion video (optional; overrides gender-based reference if provided)"),
     prompt: str | None = Form(None, description="Text prompt (optional; main.py has a sensible default)"),
     lora_strength: float | None = Form(None, description="LoRA strength (optional, 0.0-1.0; default 0.8)"),
     video_strength: float | None = Form(None, description="Video conditioning strength (optional, 0.0-1.0; default 0.95)"),
     crf: int | None = Form(None, description="Image CRF compression (optional, 18-28; default 18; higher = more smoothing)"),
     target_output_seconds: float | None = Form(None, description="Target output duration in seconds (optional, default 4.0)"),
-    reference: str = Form("default", description="Preset reference video: 'default' (female), 'female', or 'male'"),
+    gender: str = Form(..., description="Avatar gender: 'male' or 'female'"),
 ):
     request_id = uuid.uuid4().hex[:12]
 
@@ -454,64 +497,62 @@ async def generate(
         video_path.write_bytes(video_bytes)
         used_default = False
     else:
-        if reference not in REFERENCE_VIDEOS:
-            raise HTTPException(400, f"invalid reference: {reference}; must be one of {list(REFERENCE_VIDEOS.keys())}")
+        reference = "male" if gender == "male" else "female"
         video_path = REFERENCE_VIDEOS[reference]
         used_default = True
 
-    with _JOB_LOCK:
-        JOBS[request_id] = {
-            "status": "pending",
-            "image": image.filename,
-            "video": video_path.name,
-            "used_default_video": used_default,
-            "prompt": prompt,
-            "submitted_at": _now(),
-        }
+    job_data = {
+        "status": "pending",
+        "image": image.filename,
+        "video": video_path.name,
+        "used_default_video": used_default,
+        "prompt": prompt,
+        "submitted_at": _now(),
+    }
+    await JOBS.put.aio(request_id, job_data)
 
     # Use environment default if not provided
     output_seconds = target_output_seconds if target_output_seconds is not None else DEFAULT_OUTPUT_SECONDS
     threading.Thread(target=run_job, args=(request_id, image_path, video_path, prompt, lora_strength, video_strength, crf, output_seconds), daemon=True).start()
-    return {"request_id": request_id, **JOBS[request_id]}
+    return {"request_id": request_id, **job_data}
 
 
 @app.post("/idle-motion")
 async def idle_motion(
-    image_url: str = Form(..., description="GCS image URL — direct URL to the image to process."),
-    lora_strength: float | None = Form(None, description="LoRA strength (optional, 0.0-1.0; default 0.8)"),
-    video_strength: float | None = Form(None, description="Video conditioning strength (optional, 0.0-1.0; default 0.95)"),
-    crf: int | None = Form(None, description="Image CRF compression (optional, 18-28; default 18; higher = more smoothing)"),
-    target_output_seconds: float | None = Form(None, description="Target output duration in seconds (optional, default 4.0)"),
-    reference: str = Form("default", description="Preset reference video: 'default' (female), 'female', or 'male'"),
+    image_url: str = Form(..., description="GCS image URL of the avatar image."),
+    gender: str = Form(..., description="'male' or 'female'. Required."),
 ):
     """Generate an idle-motion video from a GCS image URL.
 
     Async: returns a request_id immediately. The image is downloaded from the provided GCS URL;
-    generation uses the specified reference clip (default: female). Status is tracked in memory;
-    on success the generated idle video is uploaded to R2.
+    generation uses the reference motion matching the specified gender (required: male or female).
+    Status is tracked; on success the generated idle video is uploaded to GCS.
     """
     image_url = image_url.strip()
     if not image_url:
         raise HTTPException(400, "image_url is required")
-    if reference not in REFERENCE_VIDEOS:
-        raise HTTPException(400, f"invalid reference: {reference}; must be one of {list(REFERENCE_VIDEOS.keys())}")
+
+    if gender == "female":
+        reference = "female"
+        output_seconds = DEFAULT_OUTPUT_SECONDS  # 2.0s forward + 2.0s reverse = 4s total
+    else:
+        reference = "male"  # Default to male (man.mp4)
+        output_seconds = DEFAULT_OUTPUT_SECONDS  # 2.0s forward + 2.0s reverse = 4s total
 
     request_id = uuid.uuid4().hex[:12]
     video_path = REFERENCE_VIDEOS[reference]
 
-    with _JOB_LOCK:
-        JOBS[request_id] = {
-            "status": "pending",
-            "image_url": image_url,
-            "video": video_path.name,
-            "submitted_at": _now(),
-        }
+    job_data = {
+        "status": "pending",
+        "image_url": image_url,
+        "video": video_path.name,
+        "submitted_at": _now(),
+    }
+    await JOBS.put.aio(request_id, job_data)
 
-    # Use environment default if not provided
-    output_seconds = target_output_seconds if target_output_seconds is not None else DEFAULT_OUTPUT_SECONDS
-    threading.Thread(target=run_idle_job_with_url, args=(request_id, image_url, video_path, None, lora_strength, video_strength, crf, output_seconds),
+    threading.Thread(target=run_idle_job_with_url, args=(request_id, image_url, video_path, None, None, None, None, output_seconds),
                      daemon=True).start()
-    return {"request_id": request_id, **JOBS[request_id]}
+    return {"request_id": request_id, **job_data}
 
 
 @app.get("/avatar/{avatar_id}/info")
@@ -720,13 +761,13 @@ async def animate(
         request_id = uuid.uuid4().hex[:12]
         video_path = REFERENCE_VIDEOS[reference]
 
-        with _JOB_LOCK:
-            JOBS[request_id] = {
-                "status": "pending",
-                "avatar_id": avatar_id,
-                "video": video_path.name,
-                "submitted_at": _now(),
-            }
+        job_data = {
+            "status": "pending",
+            "avatar_id": avatar_id,
+            "video": video_path.name,
+            "submitted_at": _now(),
+        }
+        await JOBS.put.aio(request_id, job_data)
 
         # Use environment default if not provided
         output_seconds = target_output_seconds if target_output_seconds is not None else DEFAULT_OUTPUT_SECONDS
@@ -735,7 +776,7 @@ async def animate(
             args=(request_id, avatar_id, video_path, None, lora_strength, video_strength, crf, output_seconds),
             daemon=True,
         ).start()
-        return {"request_id": request_id, **JOBS[request_id]}
+        return {"request_id": request_id, **job_data}
 
 
 @app.get("/jobs/{request_id}")
