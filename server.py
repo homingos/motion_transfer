@@ -140,9 +140,9 @@ def _get_4sec_loop() -> Path:
 DEFAULT_VIDEO = _ref("default_1.mp4")
 
 REFERENCE_VIDEOS = {
-    "default": _ref("default_1.mp4"),
-    "female": _ref("default_1.mp4"),
-    "male": _ref("male.mp4"),
+    "default": _ref("man.mp4"),
+    "female": _ref("women.mp4"),
+    "male": _ref("man.mp4"),
     "4sec-loop": _get_4sec_loop(),
     "trimmed": _ref("10sec_trimmed.mp4"),
 }
@@ -473,13 +473,13 @@ def index() -> str:
 @app.post("/generate")
 async def generate(
     image: UploadFile = File(..., description="Subject image (PNG or JPG)"),
-    video: UploadFile | None = File(None, description="Reference motion video (optional; overrides 'reference' if provided)"),
+    video: UploadFile | None = File(None, description="Reference motion video (optional; overrides gender-based reference if provided)"),
     prompt: str | None = Form(None, description="Text prompt (optional; main.py has a sensible default)"),
     lora_strength: float | None = Form(None, description="LoRA strength (optional, 0.0-1.0; default 0.8)"),
     video_strength: float | None = Form(None, description="Video conditioning strength (optional, 0.0-1.0; default 0.95)"),
     crf: int | None = Form(None, description="Image CRF compression (optional, 18-28; default 18; higher = more smoothing)"),
     target_output_seconds: float | None = Form(None, description="Target output duration in seconds (optional, default 4.0)"),
-    reference: str = Form("default", description="Preset reference video: 'default' (female), 'female', or 'male'"),
+    gender: str = Form(..., description="Avatar gender: 'male' or 'female'"),
 ):
     request_id = uuid.uuid4().hex[:12]
 
@@ -497,8 +497,7 @@ async def generate(
         video_path.write_bytes(video_bytes)
         used_default = False
     else:
-        if reference not in REFERENCE_VIDEOS:
-            raise HTTPException(400, f"invalid reference: {reference}; must be one of {list(REFERENCE_VIDEOS.keys())}")
+        reference = "male" if gender == "male" else "female"
         video_path = REFERENCE_VIDEOS[reference]
         used_default = True
 
@@ -521,23 +520,23 @@ async def generate(
 @app.post("/idle-motion")
 async def idle_motion(
     image_url: str = Form(..., description="GCS image URL of the avatar image."),
-    gender: str | None = Form(None, description="'male' or 'female'. Defaults to female if not provided."),
+    gender: str = Form(..., description="'male' or 'female'. Required."),
 ):
     """Generate an idle-motion video from a GCS image URL.
 
     Async: returns a request_id immediately. The image is downloaded from the provided GCS URL;
-    generation uses the reference motion matching the specified gender (default: female).
+    generation uses the reference motion matching the specified gender (required: male or female).
     Status is tracked; on success the generated idle video is uploaded to GCS.
     """
     image_url = image_url.strip()
     if not image_url:
         raise HTTPException(400, "image_url is required")
 
-    if gender == "male":
-        reference = "male"
-        output_seconds = 1.5  # 1.5s forward + 1.5s reverse = 3s total
-    else:
+    if gender == "female":
         reference = "female"
+        output_seconds = DEFAULT_OUTPUT_SECONDS  # 2.0s forward + 2.0s reverse = 4s total
+    else:
+        reference = "male"  # Default to male (man.mp4)
         output_seconds = DEFAULT_OUTPUT_SECONDS  # 2.0s forward + 2.0s reverse = 4s total
 
     request_id = uuid.uuid4().hex[:12]

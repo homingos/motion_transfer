@@ -76,6 +76,14 @@
     textarea { font: inherit; color: inherit; padding: 0.75rem 0.9rem; border-radius: 12px; border: 1.5px solid var(--border); background: color-mix(in srgb, var(--card-2) 60%, transparent); resize: vertical; min-height: 3rem; transition: border-color .15s; width: 100%; }
     textarea:focus { outline: none; border-color: var(--accent); }
 
+    .gender-options { display: flex; gap: 1rem; }
+    .gender-option { display: flex; align-items: center; gap: 0.5rem; cursor: pointer; padding: 0.5rem 0.75rem; border-radius: 8px; border: 1.5px solid var(--border); background: color-mix(in srgb, var(--card-2) 60%, transparent); transition: all .2s; }
+    .gender-option:hover { border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); }
+    .gender-option input[type="radio"] { cursor: pointer; }
+    .gender-option input[type="radio"]:checked + label { color: var(--accent-2); font-weight: 600; }
+    .gender-option input[type="radio"]:checked { accent-color: var(--accent); }
+    .gender-option.checked { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+
     button.gen {
       grid-column: 1 / -1; font: inherit; font-weight: 700; font-size: 1rem; color: #fff; cursor: pointer;
       border: none; border-radius: 12px; padding: 0.9rem 1.2rem;
@@ -143,6 +151,19 @@
             <div class="ic">🖼️</div>
             <div class="txt"><b id="imageName">Click or drop an image</b><span>Your avatar face photo</span></div>
           </label>
+        </div>
+        <div class="field">
+          <div class="lab">Avatar Gender <span class="opt">affects motion style</span></div>
+          <div class="gender-options" id="genderOptions">
+            <label class="gender-option">
+              <input type="radio" name="gender" value="female" />
+              <label style="margin: 0; cursor: pointer;">👩 Female</label>
+            </label>
+            <label class="gender-option checked">
+              <input type="radio" name="gender" value="male" checked />
+              <label style="margin: 0; cursor: pointer;">👨 Male</label>
+            </label>
+          </div>
         </div>
         <div class="field">
           <div class="lab">Animation Style <span class="opt">optional · uses default if empty</span></div>
@@ -219,7 +240,11 @@
     const imageTag = document.getElementById("imageTag");
     const refTag = document.getElementById("refTag");
 
-    const DEFAULT_REF = "/reference/default_1.mp4";
+    const DEFAULT_REF = "/reference/man.mp4";
+    const GENDER_REFS = {
+      female: "/reference/women.mp4",
+      male: "/reference/man.mp4"
+    };
 
     function wireDrop(zoneId, input, nameEl, onFile) {
       const zone = document.getElementById(zoneId);
@@ -244,11 +269,32 @@
     });
     wireDrop("dropVideo", videoInput, document.getElementById("videoName"), (f) => {
       if (f) { setReference(URL.createObjectURL(f)); refTag.textContent = f.name; }
-      else { setReference(DEFAULT_REF); refTag.textContent = "default clip"; }
+      else { updateReferenceFromGender(); }
     });
 
+    function updateReferenceFromGender() {
+      const gender = form.elements["gender"].value;
+      const ref = GENDER_REFS[gender] || DEFAULT_REF;
+      const label = gender === "male" ? "male motion" : "female motion";
+      setReference(ref);
+      refTag.textContent = label;
+    }
+
     function setReference(src) { referencePreview.src = src; refMedia.classList.add("filled"); referencePreview.play().catch(()=>{}); }
-    setReference(DEFAULT_REF); // show the default video on load
+
+    // Gender selection handler
+    document.querySelectorAll('input[name="gender"]').forEach(radio => {
+      radio.addEventListener("change", (e) => {
+        if (!videoInput.files || !videoInput.files[0]) {
+          updateReferenceFromGender();
+        }
+        // Update visual feedback
+        document.querySelectorAll(".gender-option").forEach(opt => opt.classList.remove("checked"));
+        e.target.closest(".gender-option").classList.add("checked");
+      });
+    });
+
+    updateReferenceFromGender(); // show the default video on load
 
     let ticker = null, startedAt = 0, runningLabel = "";
     function setStatus(text, kind) { statusText.textContent = text; statusEl.className = kind || ""; }
@@ -284,7 +330,9 @@
       resultEl.removeAttribute("src"); resultMedia.classList.remove("filled");
       const fd = new FormData(form);
       const video = fd.get("video");
-      if (!video || !video.size) fd.delete("video");
+      if (!video || !video.size) {
+        fd.delete("video");
+      }
       if (!fd.get("prompt")) fd.delete("prompt");
       submitBtn.disabled = true; submitBtn.classList.add("loading"); btnText.textContent = "Generating…";
       startTicker("Uploading");
