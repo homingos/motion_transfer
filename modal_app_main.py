@@ -28,6 +28,11 @@ from modal_common import (
 # Production configuration (flam, Starter plan)
 # =============================================================================
 
+import os
+
+# Set default output duration to 2 seconds (will be reversed → 4 seconds total looped)
+os.environ["TARGET_OUTPUT_SECONDS"] = "2.0"
+
 APP_NAME = APP_BASENAME                                  # "flam-motion-transfer"
 # Custom domains need a Team plan + DNS; on Starter we use the default
 # auto-generated https://<workspace>--<app>-...modal.run URL (printed on deploy).
